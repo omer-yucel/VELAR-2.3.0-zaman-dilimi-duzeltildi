@@ -555,6 +555,50 @@ async def get_dashboard_overview(current_user: User = Depends(get_current_user))
     
     return dashboard_data
 
+# Veriler (Data) Route - Manager Only
+@api_router.get("/veriler")
+async def get_process_durations(current_user: User = Depends(get_current_user)):
+    # Check if user is manager or admin
+    if current_user.role not in [UserRole.MANAGER, UserRole.ADMIN]:
+        raise HTTPException(status_code=403, detail="Access denied. Manager privileges required.")
+    
+    # Get all completed process instances with timing data
+    process_instances = await db.process_instances.find({
+        "status": ProcessStatus.COMPLETED,
+        "start_time": {"$ne": None},
+        "end_time": {"$ne": None}
+    }).to_list(1000)
+    
+    duration_data = []
+    for process in process_instances:
+        # Calculate duration in minutes
+        start_time = process["start_time"]
+        end_time = process["end_time"]
+        duration_minutes = (end_time - start_time).total_seconds() / 60
+        
+        # Get part and project information
+        part = await db.parts.find_one({"id": process["part_id"]})
+        project = await db.projects.find_one({"id": part["project_id"]}) if part else None
+        
+        # Get operator information
+        operator = await db.users.find_one({"id": process["operator_id"]}) if process.get("operator_id") else None
+        
+        duration_data.append({
+            "id": process["id"],
+            "step_name": process["step_name"],
+            "part_number": part["part_number"] if part else "Unknown",
+            "project_name": project["name"] if project else "Unknown",
+            "operator_name": operator["username"] if operator else "Unknown",
+            "duration_minutes": round(duration_minutes, 2),
+            "start_time": start_time,
+            "end_time": end_time
+        })
+    
+    # Sort by end_time descending (most recent first)
+    duration_data.sort(key=lambda x: x["end_time"], reverse=True)
+    
+    return duration_data
+
 # Include the router in the main app
 app.include_router(api_router)
 
