@@ -8,7 +8,7 @@ import { Input } from './components/ui/input';
 import { Badge } from './components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './components/ui/select';
-import { QrCode, Factory, Scan, Users, BarChart3, Settings, LogOut, Camera, CheckCircle, Clock, Play, Pause, Plus, X, ChevronUp, ChevronDown, List, Database } from 'lucide-react';
+import { QrCode, Factory, Scan, Users, BarChart3, Settings, LogOut, Camera, CheckCircle, Clock, Play, Pause, Plus, X, ChevronUp, ChevronDown, List, Database, Download } from 'lucide-react';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
@@ -1424,6 +1424,36 @@ const QRCodes = () => {
     }
   };
 
+  // Download a PDF containing all QR codes for the selected part
+  const handleDownloadPdf = async () => {
+    if (!selectedPart) return;
+    try {
+      const response = await axios.get(`${API}/parts/${selectedPart}/qr-codes/pdf`, {
+        responseType: 'blob'
+      });
+      const blob = new Blob([response.data], { type: 'application/pdf' });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      // Attempt to extract filename from Content-Disposition header
+      let filename = `qr_codes_${selectedPart}.pdf`;
+      const disposition = response.headers && response.headers['content-disposition'];
+      if (disposition && disposition.includes('filename=')) {
+        const matched = disposition.match(/filename=([^;]+)/);
+        if (matched && matched[1]) {
+          filename = matched[1].trim().replace(/\"/g, '');
+        }
+      }
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Failed to download PDF:', error);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <h2 className="text-2xl font-bold text-white">QR Kodlar</h2>
@@ -1446,7 +1476,20 @@ const QRCodes = () => {
             </SelectContent>
           </Select>
         </CardContent>
-      </Card>
+        </Card>
+
+      {/* PDF Download Button */}
+      {selectedPart && qrCodes.length > 0 && (
+        <div className="flex justify-end">
+          <Button
+            onClick={handleDownloadPdf}
+            className="mt-4 bg-blue-600 hover:bg-blue-700"
+          >
+            <Download className="h-4 w-4 mr-2" />
+            PDF İndir
+          </Button>
+        </div>
+      )}
       
       {loading && (
         <div className="text-center text-white">Loading QR codes...</div>

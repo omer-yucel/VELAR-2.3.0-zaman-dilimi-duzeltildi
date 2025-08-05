@@ -12,6 +12,9 @@ import uuid
 from datetime import datetime, timedelta
 import qrcode
 from io import BytesIO
+from fastapi.responses import Response
+from PIL import Image, ImageDraw, ImageFont
+import math
 import base64
 import bcrypt
 import jwt
@@ -386,6 +389,212 @@ async def get_part_qr_codes(part_id: str, current_user: User = Depends(get_curre
         })
     
     return qr_codes
+
+# ---------------------------------------------------------------------------
+# QR Code PDF Export Route
+# This endpoint generates a single-page PDF containing all start and end QR codes
+# for a given work order (part). The PDF is designed for printing on an A4 page
+# so that operators can scan the codes directly from paper. Each process step
+# appears as a separate row in the PDF with its start and end QR codes side by
+# side, along with their respective codes.
+@api_router.get("/parts/{part_id}/qr-codes/pdf")
+async def get_part_qr_codes_pdf(part_id: str, current_user: User = Depends(get_current_user)):
+    """
+    Generate a PDF document containing all QR codes for the specified part (work order).
+
+    This endpoint dynamically lays out the QR codes across multiple pages if needed. Each
+    process step is rendered on its own row with the step name, start QR code, end QR
+    code, and their corresponding labels. The PDF is formatted for A4 paper at 300 DPI
+    and designed to be printed for operators to scan.
+
+    The resulting file is named according to the pattern:
+      "(<work_order_number>) - Work Order QR Codes.pdf"
+
+    where <work_order_number> is retrieved from the part's `part_number` field. If the
+    part is not found, the `part_id` is used instead.
+    """
+    # Fetch all process instances for the specified part
+    process_instances = await db.process_instances.find({"part_id": part_id}).to_list(100)
+    if not process_instances:
+        raise HTTPException(status_code=404, detail="No process instances found for this part")
+
+    # Build a list of items with step name and generated QR images
+    items = []  # Each entry: (step_name, start_code, end_code, start_img, end_img)
+    for pi in process_instances:
+        process = ProcessInstance(**pi)
+        # Generate PIL images for start and end QR codes using the existing helper
+        start_data_url = generate_qr_code(process.start_qr_code)
+        end_data_url = generate_qr_code(process.end_qr_code)
+        try:
+            start_base64 = start_data_url.split(",", 1)[1]
+            end_base64 = end_data_url.split(",", 1)[1]
+            start_bytes = base64.b64decode(start_base64)
+            end_bytes = base64.b64decode(end_base64)
+            start_img = Image.open(BytesIO(start_bytes)).convert("RGB")
+            end_img = Image.open(BytesIO(end_bytes)).convert("RGB")
+        except Exception:
+            # Skip this process step if decoding fails
+            continue
+        items.append((process.step_name, process.start_qr_code, process.end_qr_code, start_img, end_img))
+
+
+    # Sort items by step index if available to preserve process order.
+    # We assume that process_instances are in the correct order by default, but in case
+    # they are not, we attempt to sort by the `step_index` attribute. We cannot
+    # access `step_index` directly from `items`, so we build a mapping from
+    # start_code/end_code to step_index based on the original `process_instances` list.
+    try:
+        # Create a lookup of start_qr_code to step_index
+        index_lookup = {pi["start_qr_code"]: pi["step_index"] for pi in process_instances}
+        items.sort(key=lambda t: index_lookup.get(t[1], 0))
+    except Exception:
+        pass  # If sorting fails, proceed with the existing order
+
+    # ----------------------------------------------------------------------
+    # New layout implementation: divide the page into two columns, each with
+    # exactly 10 rows. This layout avoids overlapping of text and QR codes by
+    # using fixed row heights and truncating long strings. QR code sizes and
+    # font sizes are computed based on the row height, with upper bounds to
+    # ensure readability. Each process step is drawn into the appropriate
+    # column and row. If more than 20 process steps exist, additional pages
+    # are created automatically.
+    # ----------------------------------------------------------------------
+    # Define page dimensions (A4 at 300 DPI)
+    page_width = 2480
+    page_height = 3508
+    margin = 80
+    rows_per_column = 10
+    columns = 2
+    available_height = page_height - 2 * margin
+    row_height = available_height // rows_per_column
+
+    # Compute font sizes. Title and label fonts are capped to avoid
+    # becoming too large when there are fewer items. The QR size is
+    # calculated so that the title, QR codes and labels fit within the row.
+    tentative_title = max(16, int(row_height * 0.15))
+    tentative_label = max(10, int(row_height * 0.08))
+    title_font_size = min(32, tentative_title)
+    label_font_size = min(18, tentative_label)
+    vertical_padding = 40
+    qr_size = row_height - (title_font_size + 2 * label_font_size + vertical_padding)
+    if qr_size < 80:
+        qr_size = 80
+    line_spacing = max(2, int(label_font_size * 0.2))
+
+    # Load fonts with fallback to default
+    try:
+        font_title = ImageFont.truetype("DejaVuSans-Bold.ttf", title_font_size)
+    except Exception:
+        font_title = ImageFont.load_default()
+    try:
+        font_label = ImageFont.truetype("DejaVuSans.ttf", label_font_size)
+    except Exception:
+        font_label = ImageFont.load_default()
+
+    # Prepare the step name: truncate long names to a single line with ellipsis
+    def prepare_step_name(name: str, max_chars: int = 30) -> str:
+        if not name:
+            return ""
+        if len(name) <= max_chars:
+            return name
+        return name[:max_chars - 3] + '...'
+
+    # Wrap codes into at most two lines. If the code is longer than
+    # permitted, truncate and append an ellipsis. Only the first line
+    # contains the prefix (e.g., 'Başlangıç:' or 'Bitiş:').
+    def wrap_code(prefix: str, code: str, max_chars: int = 18, max_lines: int = 2) -> List[str]:
+        if not code:
+            return [prefix]
+        lines: List[str] = []
+        first_available = max_chars - len(prefix) - 1
+        first_segment = code[:first_available]
+        lines.append(f"{prefix} {first_segment}")
+        remaining = code[first_available:]
+        for i in range(0, len(remaining), max_chars):
+            segment = remaining[i:i + max_chars]
+            lines.append(segment)
+            if len(lines) >= max_lines:
+                if i + max_chars < len(remaining):
+                    lines[-1] = lines[-1][:-3] + '...'
+                break
+        return lines
+
+    # Generate pages
+    pages: List[Image.Image] = []
+    for page_start in range(0, len(items), rows_per_column * columns):
+        page_items = items[page_start: page_start + rows_per_column * columns]
+        # Create a blank page
+        page_img = Image.new('RGB', (page_width, page_height), 'white')
+        draw_page = ImageDraw.Draw(page_img)
+        # Draw vertical separator line
+        mid_x = page_width // 2
+        line_thickness = 4
+        draw_page.line([(mid_x, 0), (mid_x, page_height)], fill=(0, 0, 0), width=line_thickness)
+        # Draw each item
+        for idx, (step_name, start_code, end_code, start_img, end_img) in enumerate(page_items):
+            col = idx // rows_per_column
+            row = idx % rows_per_column
+            x_offset = margin if col == 0 else mid_x + margin
+            y_offset = margin + row * row_height
+            # Draw the truncated step name
+            name_display = prepare_step_name(step_name, max_chars=30)
+            # Determine title height using font metrics if available
+            if hasattr(font_title, 'getbbox'):
+                bbox = font_title.getbbox(name_display)
+                title_height = bbox[3] - bbox[1]
+            else:
+                title_height = title_font_size
+            draw_page.text((x_offset, y_offset), name_display, fill=(0, 0, 0), font=font_title)
+            # Position for QR codes
+            y_qr = y_offset + title_height + 5
+            # Draw start QR
+            if start_img:
+                try:
+                    resized_start = start_img.resize((qr_size, qr_size), resample=Image.NEAREST)
+                except Exception:
+                    resized_start = start_img.resize((qr_size, qr_size))
+                page_img.paste(resized_start, (x_offset, y_qr))
+            # Draw end QR
+            spacing_between_qrs = 10
+            x_end = x_offset + qr_size + spacing_between_qrs
+            if end_img:
+                try:
+                    resized_end = end_img.resize((qr_size, qr_size), resample=Image.NEAREST)
+                except Exception:
+                    resized_end = end_img.resize((qr_size, qr_size))
+                page_img.paste(resized_end, (x_end, y_qr))
+            # Prepare labels
+            start_lines = wrap_code("Başlangıç:", start_code, max_chars=18, max_lines=2)
+            end_lines = wrap_code("Bitiş:", end_code, max_chars=18, max_lines=2)
+            max_label_lines = max(len(start_lines), len(end_lines))
+            y_label_start = y_qr + qr_size + 5
+            for line_idx in range(max_label_lines):
+                st = start_lines[line_idx] if line_idx < len(start_lines) else ""
+                et = end_lines[line_idx] if line_idx < len(end_lines) else ""
+                draw_page.text((x_offset, y_label_start + line_idx * (label_font_size + line_spacing)), st, fill=(0, 0, 0), font=font_label)
+                draw_page.text((x_end, y_label_start + line_idx * (label_font_size + line_spacing)), et, fill=(0, 0, 0), font=font_label)
+        pages.append(page_img)
+
+    # Create PDF in memory
+    pdf_buffer = BytesIO()
+    if pages:
+        pages[0].save(pdf_buffer, format='PDF', save_all=True, append_images=pages[1:], resolution=300.0)
+    else:
+        blank_page = Image.new('RGB', (page_width, page_height), 'white')
+        blank_page.save(pdf_buffer, format='PDF', resolution=300.0)
+    pdf_buffer.seek(0)
+
+    # Determine file name based on part number
+    part_doc = await db.parts.find_one({"id": part_id})
+    part_number = part_doc.get("part_number") if part_doc else None
+    work_order_number = part_number or part_id
+    filename = f"({work_order_number}) - Work Order QR Codes.pdf"
+
+    return Response(
+        content=pdf_buffer.getvalue(),
+        media_type='application/pdf',
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
 
 # QR Scanning Routes with Session-Based Authentication
 @api_router.post("/scan/start")
