@@ -343,7 +343,7 @@ const OperatorScanner = () => {
                 <QrCode className="h-12 w-12 text-blue-400" />
               </div>
               <CardTitle className="text-2xl text-white mb-2">
-                QR Code Scanner
+                QR Kod Okuyucu
               </CardTitle>
               <CardDescription className="text-gray-300">
                 {manualMode ? 'Enter QR code manually' : 'Point camera at QR code'}
@@ -361,8 +361,8 @@ const OperatorScanner = () => {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="start">▶️ Start Process</SelectItem>
-                    <SelectItem value="end">⏹️ End Process</SelectItem>
+                    <SelectItem value="start">▶️ İşlemi Başlat</SelectItem>
+                    <SelectItem value="end">⏹️ İşlemi Bitir</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -466,7 +466,7 @@ const OperatorScanner = () => {
                     ) : (
                       <>
                         {scanType === 'start' ? <Play className="h-5 w-5 mr-2" /> : <Pause className="h-5 w-5 mr-2" />}
-                        {scanType === 'start' ? 'START PROCESS' : 'END PROCESS'}
+                        {scanType === 'start' ? 'İşlemi Başlat' : 'İşlemi Bitir'}
                       </>
                     )}
                   </Button>
@@ -613,7 +613,7 @@ const QRScanner = () => {
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-white">
             <Scan className="h-5 w-5" />
-            QR Code Scanner
+            QR Kod Okuyucu
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -644,7 +644,7 @@ const QRScanner = () => {
             <div>
               <Input
                 type="text"
-                placeholder="Username"
+                placeholder="Kullanıcı Adı"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 className="bg-white/10 border-white/20 text-white placeholder:text-gray-400"
@@ -655,7 +655,7 @@ const QRScanner = () => {
             <div>
               <Input
                 type="password"
-                placeholder="Password"
+                placeholder="Şifre"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 className="bg-white/10 border-white/20 text-white placeholder:text-gray-400"
@@ -751,7 +751,7 @@ const Dashboard = () => {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h2 className="text-2xl font-bold text-white">Production Dashboard</h2>
+        <h2 className="text-2xl font-bold text-white">Üretim Takip Paneli</h2>
         <Button onClick={fetchDashboardData} variant="outline" size="sm" className="bg-gray-300 hover:bg-gray-400 text-gray-800">
           Refresh
         </Button>
@@ -1426,16 +1426,16 @@ const QRCodes = () => {
 
   return (
     <div className="space-y-6">
-      <h2 className="text-2xl font-bold text-white">QR Codes</h2>
+      <h2 className="text-2xl font-bold text-white">QR Kodlar</h2>
       
       <Card className="bg-white/5 backdrop-blur-lg border-white/10">
         <CardHeader>
-          <CardTitle className="text-white">Generate QR Codes</CardTitle>
+          <CardTitle className="text-white">İş Emri İçin QR Kod Üret</CardTitle>
         </CardHeader>
         <CardContent>
           <Select value={selectedPart} onValueChange={handlePartChange}>
             <SelectTrigger className="bg-white/10 border-white/20 text-white">
-              <SelectValue placeholder="Select Part" />
+              <SelectValue placeholder="İş Emri Seçin" />
             </SelectTrigger>
             <SelectContent>
               {parts.map(part => (
@@ -1466,7 +1466,7 @@ const QRCodes = () => {
             <CardContent>
               <div className="grid md:grid-cols-2 gap-6">
                 <div className="text-center">
-                  <h4 className="text-green-400 font-medium mb-2">START QR Code</h4>
+                  <h4 className="text-green-400 font-medium mb-2">Başlangıç QR Code</h4>
                   <div className="bg-white p-4 rounded-lg inline-block">
                     <img src={qrData.start_qr.image} alt="Start QR" className="w-32 h-32" />
                   </div>
@@ -1474,7 +1474,7 @@ const QRCodes = () => {
                 </div>
                 
                 <div className="text-center">
-                  <h4 className="text-red-400 font-medium mb-2">END QR Code</h4>
+                  <h4 className="text-red-400 font-medium mb-2">Bitiş QR Code</h4>
                   <div className="bg-white p-4 rounded-lg inline-block">
                     <img src={qrData.end_qr.image} alt="End QR" className="w-32 h-32" />
                   </div>
@@ -1697,7 +1697,7 @@ const Veriler = () => {
           <CardTitle className="text-white">İşlem Süreleri</CardTitle>
           <CardDescription className="text-gray-300">
             {selectedProject && selectedPart 
-              ? 'Seçili proje ve iş emri için QR kod tarama başlangıç ve bitiş süreleri arasındaki fark'
+              ? 'Seçili proje ve iş emri için process süreleri'
               : 'Verileri görüntülemek için yukarıdan proje ve iş emri seçin'
             }
           </CardDescription>
@@ -1823,7 +1823,7 @@ const MainApp = () => {
             </TabsTrigger>
             <TabsTrigger value="qrcodes" className="data-[state=active]:bg-white/20">
               <QrCode className="h-4 w-4 mr-2" />
-              QR Codes
+              QR Kodlar
             </TabsTrigger>
             {(user?.role === 'manager' || user?.role === 'admin') && (
               <TabsTrigger value="veriler" className="data-[state=active]:bg-white/20">
