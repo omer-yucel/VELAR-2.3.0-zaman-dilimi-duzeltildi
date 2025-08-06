@@ -90,7 +90,7 @@ const Login = () => {
               className="h-[150px] w-[150px] object-contain"
             />
           </div>
-          <CardTitle className="text-2xl text-white">Velar Makine Üretim Takip Sistemi</CardTitle>
+          <CardTitle className="text-2xl text-white">Velar Makine <br /> Üretim Takip Sistemi</CardTitle>
           <CardDescription className="text-gray-300">
             Giriş yaparak üretim takip sistemine erişin
           </CardDescription>
@@ -137,7 +137,6 @@ const Login = () => {
 // Dedicated Operator QR Scanner Component (Full Screen)
 const OperatorScanner = () => {
   const [qrCode, setQrCode] = useState('');
-  const [scanType, setScanType] = useState('start');
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
@@ -147,6 +146,12 @@ const OperatorScanner = () => {
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
   const [pendingQrCode, setPendingQrCode] = useState('');
   const { user, logout } = React.useContext(AuthContext);
+  
+  // New state for work order scanning
+  const [workOrderData, setWorkOrderData] = useState(null);
+  const [selectedProcess, setSelectedProcess] = useState(null);
+  const [actionType, setActionType] = useState('start');
+  const [showProcessSelection, setShowProcessSelection] = useState(false);
   
   const videoRef = React.useRef(null);
   const qrScannerRef = React.useRef(null);
@@ -239,32 +244,27 @@ const OperatorScanner = () => {
     }
   };
 
-  // Handle automatic scan when QR code is detected
-  const handleAutoScan = async (scannedCode) => {
+  // Handle scanning a work order QR code
+  const handleWorkOrderScan = async (scannedCode) => {
     if (loading) return; // Prevent multiple simultaneous scans
     
     setLoading(true);
     setError('');
     setResult(null);
+    setWorkOrderData(null);
+    setShowProcessSelection(false);
 
     try {
-      const endpoint = scanType === 'start' ? '/scan/start' : '/scan/end';
-      const response = await axios.post(`${API}${endpoint}`, {
+      const response = await axios.post(`${API}/scan/work-order`, {
         qr_code: scannedCode,
         username: user.username,
         password: 'session_authenticated'
       });
 
-      setResult(response.data);
+      // Set work order data and show process selection
+      setWorkOrderData(response.data);
+      setShowProcessSelection(true);
       
-      // Auto-clear result and restart camera after 3 seconds
-      setTimeout(() => {
-        setResult(null);
-        setQrCode('');
-        if (!manualMode && !isDialogShowing.current) {
-          startCamera();
-        }
-      }, 3000);
     } catch (error) {
       setError(error.response?.data?.detail || 'Scan failed');
       
@@ -280,19 +280,61 @@ const OperatorScanner = () => {
     setLoading(false);
   };
 
+  // Handle process action (start or end)
+  const handleProcessAction = async () => {
+    if (!selectedProcess || !workOrderData || loading) return;
+    
+    setLoading(true);
+    setError('');
+    setResult(null);
+
+    try {
+      const response = await axios.post(`${API}/scan/process-action`, {
+        qr_code: workOrderData.qr_code,
+        username: user.username,
+        password: 'session_authenticated',
+        process_index: selectedProcess.step_index,
+        action: actionType
+      });
+
+      setResult(response.data);
+      
+      // Reset state after successful action
+      setTimeout(() => {
+        setResult(null);
+        setWorkOrderData(null);
+        setSelectedProcess(null);
+        setShowProcessSelection(false);
+        setQrCode('');
+        if (!manualMode && !isDialogShowing.current) {
+          startCamera();
+        }
+      }, 3000);
+    } catch (error) {
+      setError(error.response?.data?.detail || 'Process action failed');
+      
+      // Auto-clear error after 5 seconds
+      setTimeout(() => {
+        setError('');
+      }, 5000);
+    }
+
+    setLoading(false);
+  };
+
   // Handle manual scan
   const handleManualScan = async (e) => {
     e.preventDefault();
     if (!qrCode.trim()) return;
     
-    await handleAutoScan(qrCode);
+    await handleWorkOrderScan(qrCode);
   };
 
   // Handle confirmation dialog - Yes button
   const handleConfirmScan = async () => {
     setShowConfirmDialog(false);
     isDialogShowing.current = false;
-    await handleAutoScan(pendingQrCode);
+    await handleWorkOrderScan(pendingQrCode);
     setPendingQrCode('');
   };
 
@@ -308,17 +350,24 @@ const OperatorScanner = () => {
     }
   };
 
+  // Handle process selection
+  const handleProcessSelect = (process) => {
+    setSelectedProcess(process);
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-gray-900 to-slate-800 flex flex-col">
       {/* Header with minimal info */}
       <div className="bg-black/20 backdrop-blur-lg border-b border-white/10 p-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-blue-600/20 rounded-full">
-              <Camera className="h-6 w-6 text-blue-400" />
-            </div>
+              <img 
+                src="https://customer-assets.emergentagent.com/job_metalops/artifacts/i1dybgg7_Velar%20Makine%20Logo%20SVG.png" 
+                alt="Velar Makine Logo" 
+                className="h-10 w-10 object-contain"
+              />
             <div>
-              <h1 className="text-xl font-bold text-white">QR Scanner</h1>
+              <h1 className="text-xl font-bold text-white">Velar Makine</h1>
               <p className="text-sm text-gray-300">Operator: {user?.username}</p>
             </div>
           </div>
@@ -329,7 +378,7 @@ const OperatorScanner = () => {
             className="border-white/20 text-white hover:bg-white/10"
           >
             <LogOut className="h-4 w-4 mr-2" />
-            End Shift
+            Çıkış Yap
           </Button>
         </div>
       </div>
@@ -337,269 +386,395 @@ const OperatorScanner = () => {
       {/* Main Scanner Interface */}
       <div className="flex-1 flex items-center justify-center p-4">
         <div className="w-full max-w-lg">
-          <Card className="bg-white/10 backdrop-blur-lg border-white/20 shadow-2xl">
-            <CardHeader className="text-center pb-4">
-              <div className="mx-auto mb-4 p-4 bg-blue-600/20 rounded-full w-fit">
-                <QrCode className="h-12 w-12 text-blue-400" />
-              </div>
-              <CardTitle className="text-2xl text-white mb-2">
-                QR Kod Okuyucu
-              </CardTitle>
-              <CardDescription className="text-gray-300">
-                {manualMode ? 'Enter QR code manually' : 'Point camera at QR code'}
-              </CardDescription>
-            </CardHeader>
-            
-            <CardContent className="space-y-4">
-              {/* Scan Type Selector */}
-              <div>
-                <label className="block text-sm font-medium text-white mb-2">
-                  Action Type
-                </label>
-                <Select value={scanType} onValueChange={setScanType}>
-                  <SelectTrigger className="bg-white/10 border-white/20 text-white h-12">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="start">▶️ İşlemi Başlat</SelectItem>
-                    <SelectItem value="end">⏹️ İşlemi Bitir</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              {/* Camera Scanner or Manual Mode Toggle */}
-              <div className="flex justify-center mb-4">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setManualMode(!manualMode)}
-                  className="border-white/20 text-white hover:bg-white/10"
+          {/* Process Selection View */}
+          {showProcessSelection && workOrderData ? (
+            <Card className="bg-white/10 backdrop-blur-lg border-white/20 shadow-2xl">
+              <CardHeader className="text-center pb-4">
+                <div className="mx-auto mb-4 p-4 bg-blue-600/20 rounded-full w-fit">
+                  <Factory className="h-12 w-12 text-blue-400" />
+                </div>
+                <CardTitle className="text-2xl text-white mb-2">
+                  İş Emri: {workOrderData.work_order.part_number}
+                </CardTitle>
+                <CardDescription className="text-gray-300">
+                  Mevcut Adım: {workOrderData.work_order.current_step_name} ({workOrderData.work_order.current_step_index + 1}/{workOrderData.work_order.total_steps})
+                </CardDescription>
+              </CardHeader>
+              
+              <CardContent className="space-y-6">
+                {/* Process Selection */}
+                <div>
+                  <label className="block text-sm font-medium text-white mb-2">
+                    İşlem Adımı Seçin
+                  </label>
+                  <div className="space-y-2 max-h-48 overflow-y-auto">
+                    {workOrderData.processes.map((process) => (
+                      <div 
+                        key={process.step_index}
+                        onClick={() => process.can_start || process.can_end ? handleProcessSelect(process) : null}
+                        className={`p-3 rounded-lg border cursor-pointer ${
+                          selectedProcess?.step_index === process.step_index 
+                            ? 'bg-blue-600/40 border-blue-500' 
+                            : process.can_start || process.can_end
+                              ? 'bg-white/10 border-white/20 hover:bg-white/20' 
+                              : 'bg-white/5 border-white/10 opacity-50 cursor-not-allowed'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-3">
+                            <span className="text-xs bg-white/10 rounded-full h-6 w-6 flex items-center justify-center text-white">
+                              {process.step_index + 1}
+                            </span>
+                            <span className="text-white">
+                              {process.step_name}
+                            </span>
+                          </div>
+                          <Badge className={`${getStatusColor(process.status)} text-white`}>
+                            {process.status.replace('_', ' ').toUpperCase()}
+                          </Badge>
+                        </div>
+                        {(process.can_start || process.can_end) && (
+                          <div className="mt-2 text-xs text-blue-300">
+                            {process.can_start && process.can_end 
+                              ? 'Bu adımı başlatabilir veya bitirebilirsiniz' 
+                              : process.can_start 
+                                ? 'Bu adımı başlatabilirsiniz' 
+                                : 'Bu adımı bitirebilirsiniz'}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                
+                {/* Action Type Selection */}
+                {selectedProcess && (
+                  <div>
+                    <label className="block text-sm font-medium text-white mb-2">
+                      İşlem Türü
+                    </label>
+                    <div className="grid grid-cols-2 gap-3">
+                      {selectedProcess.can_start && (
+                        <Button
+                          type="button"
+                          onClick={() => setActionType('start')}
+                          className={`h-12 ${actionType === 'start' 
+                            ? 'bg-green-600 hover:bg-green-700' 
+                            : 'bg-white/10 hover:bg-white/20'}`}
+                        >
+                          <Play className="h-5 w-5 mr-2" />
+                          Başlat
+                        </Button>
+                      )}
+                      {selectedProcess.can_end && (
+                        <Button
+                          type="button"
+                          onClick={() => setActionType('end')}
+                          className={`h-12 ${actionType === 'end' 
+                            ? 'bg-red-600 hover:bg-red-700' 
+                            : 'bg-white/10 hover:bg-white/20'}`}
+                        >
+                          <Pause className="h-5 w-5 mr-2" />
+                          Bitir
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                )}
+                
+                {/* Submit Button */}
+                <Button 
+                  onClick={handleProcessAction}
+                  disabled={!selectedProcess || loading}
+                  className="w-full bg-blue-600 hover:bg-blue-700 h-12 mt-4"
                 >
-                  {manualMode ? (
+                  {loading ? (
                     <>
-                      <Camera className="h-4 w-4 mr-2" />
-                      Switch to Camera
+                      <div className="animate-spin rounded-full h-5 w-5 border-2 border-white border-t-transparent mr-3" />
+                      İşleniyor...
                     </>
                   ) : (
                     <>
-                      <Scan className="h-4 w-4 mr-2" />
-                      Manual Entry
+                      <CheckCircle className="h-5 w-5 mr-2" />
+                      İşlemi Onayla
                     </>
                   )}
                 </Button>
-              </div>
-
-              {/* Camera Scanner */}
-              {!manualMode && (
-                <div className="space-y-4">
-                  <div className="relative bg-black rounded-lg overflow-hidden" style={{ aspectRatio: '4/3' }}>
-                    <video
-                      ref={videoRef}
-                      className="w-full h-full object-cover"
-                      playsInline
-                      muted
-                    />
-                    {!cameraActive && (
-                      <div className="absolute inset-0 flex items-center justify-center bg-black/50">
-                        <Button
-                          onClick={startCamera}
-                          className="bg-blue-600 hover:bg-blue-700"
-                          disabled={loading}
-                        >
-                          <Camera className="h-5 w-5 mr-2" />
-                          Start Camera
-                        </Button>
-                      </div>
-                    )}
-                    {cameraActive && (
-                      <div className="absolute top-2 right-2">
-                        <Button
-                          onClick={stopCamera}
-                          variant="outline"
-                          size="sm"
-                          className="bg-black/50 border-white/20 text-white hover:bg-black/70"
-                        >
-                          <X className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-                  
-                  {qrCode && (
-                    <div className="text-center">
-                      <p className="text-sm text-gray-300">Detected QR Code:</p>
-                      <p className="text-white font-mono bg-white/10 p-2 rounded mt-1 break-all">{qrCode}</p>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Manual Entry Mode */}
-              {manualMode && (
-                <form onSubmit={handleManualScan} className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-medium text-white mb-2">
-                      QR Code
-                    </label>
-                    <Input
-                      type="text"
-                      placeholder="Enter QR code..."
-                      value={qrCode}
-                      onChange={(e) => setQrCode(e.target.value)}
-                      className="bg-white/10 border-white/20 text-white placeholder:text-gray-400 h-12 text-center font-mono"
-                      required
-                      autoFocus
-                    />
-                  </div>
-                  
-                  <Button 
-                    type="submit" 
-                    className="w-full bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 h-12"
-                    disabled={loading || !qrCode.trim()}
+                
+                {/* Cancel Button */}
+                <Button 
+                  onClick={() => {
+                    setWorkOrderData(null);
+                    setSelectedProcess(null);
+                    setShowProcessSelection(false);
+                    if (!manualMode) {
+                      startCamera();
+                    }
+                  }}
+                  variant="outline"
+                  className="w-full border-white/20 text-white hover:bg-white/10"
+                >
+                  <X className="h-4 w-4 mr-2" />
+                  İptal
+                </Button>
+              </CardContent>
+            </Card>
+          ) : (
+            <Card className="bg-white/10 backdrop-blur-lg border-white/20 shadow-2xl">
+              <CardHeader className="text-center pb-4">
+                
+                <CardTitle className="text-2xl text-white">
+                  Üretim Takip Sistemi <br /> QR Kod Okuyucu 
+                </CardTitle>
+                <CardDescription className="text-gray-300">
+                  {manualMode ? 'Manuel Giriş' : 'Kameraya QR Kodu Taratın'}
+                </CardDescription>
+              </CardHeader>
+              
+              <CardContent className="space-y-4">
+                {/* Camera Scanner or Manual Mode Toggle */}
+                <div className="flex justify-center mb-4">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setManualMode(!manualMode)}
+                    className="border-white/20 text-white hover:bg-white/10"
                   >
-                    {loading ? (
+                    {manualMode ? (
                       <>
-                        <div className="animate-spin rounded-full h-5 w-5 border-2 border-white border-t-transparent mr-3" />
-                        Processing...
+                        <Camera className="h-4 w-4 mr-2" />
+                        Switch to Camera
                       </>
                     ) : (
                       <>
-                        {scanType === 'start' ? <Play className="h-5 w-5 mr-2" /> : <Pause className="h-5 w-5 mr-2" />}
-                        {scanType === 'start' ? 'İşlemi Başlat' : 'İşlemi Bitir'}
+                        <Scan className="h-4 w-4 mr-2" />
+                        Manuel Giriş
                       </>
                     )}
                   </Button>
-                </form>
-              )}
+                </div>
 
-              {/* Camera Error */}
-              {cameraError && (
-                <div className="p-3 bg-yellow-500/20 border border-yellow-500/50 rounded-lg">
-                  <div className="flex items-start gap-2 text-yellow-400">
-                    <Camera className="h-5 w-5 mt-0.5 flex-shrink-0" />
+                {/* Camera Scanner */}
+                {!manualMode && (
+                  <div className="space-y-4">
+                    <div className="relative bg-black rounded-lg overflow-hidden" style={{ aspectRatio: '4/3' }}>
+                      <video
+                        ref={videoRef}
+                        className="w-full h-full object-cover"
+                        playsInline
+                        muted
+                      />
+                      {!cameraActive && (
+                        <div className="absolute inset-0 flex items-center justify-center bg-black/50">
+                          <Button
+                            onClick={startCamera}
+                            className="bg-blue-600 hover:bg-blue-700"
+                            disabled={loading}
+                          >
+                            <Camera className="h-5 w-5 mr-2" />
+                            Kamerayı Başlat
+                          </Button>
+                        </div>
+                      )}
+                      {cameraActive && (
+                        <div className="absolute top-2 right-2">
+                          <Button
+                            onClick={stopCamera}
+                            variant="outline"
+                            size="sm"
+                            className="bg-black/50 border-white/20 text-white hover:bg-black/70"
+                          >
+                            <X className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                    
+                    {qrCode && (
+                      <div className="text-center">
+                        <p className="text-sm text-gray-300">Detected QR Code:</p>
+                        <p className="text-white font-mono bg-white/10 p-2 rounded mt-1 break-all">{qrCode}</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Manual Entry Mode */}
+                {manualMode && (
+                  <form onSubmit={handleManualScan} className="space-y-4">
                     <div>
-                      <p className="font-semibold text-sm">Camera Issue</p>
-                      <p className="text-xs text-yellow-300 mt-1">{cameraError}</p>
+                      <label className="block text-sm font-medium text-white mb-2">
+                        QR Code
+                      </label>
+                      <Input
+                        type="text"
+                        placeholder="QR Kodu Elle Girin..."
+                        value={qrCode}
+                        onChange={(e) => setQrCode(e.target.value)}
+                        className="bg-white/10 border-white/20 text-white placeholder:text-gray-400 h-12 text-center font-mono"
+                        required
+                        autoFocus
+                      />
                     </div>
-                  </div>
-                </div>
-              )}
-              
-              {/* Success Message */}
-              {result && (
-                <div className="p-4 bg-gradient-to-r from-green-500/20 to-emerald-500/20 border border-green-500/50 rounded-lg animate-in fade-in duration-300">
-                  <div className="flex items-center gap-3 text-green-400 mb-2">
-                    <CheckCircle className="h-6 w-6" />
-                    <span className="font-semibold">Success!</span>
-                  </div>
-                  <div className="space-y-1 text-sm">
-                    <p className="text-white font-medium">{result.message}</p>
-                    <p className="text-green-200">Process Step: {result.step_name}</p>
-                    <p className="text-green-200">Time: {new Date().toLocaleTimeString()}</p>
-                  </div>
-                </div>
-              )}
-              
-              {/* Error Message */}
-              {error && (
-                <div className="p-4 bg-gradient-to-r from-red-500/20 to-rose-500/20 border border-red-500/50 rounded-lg animate-in fade-in duration-300">
-                  <div className="flex items-center gap-2 text-red-400 mb-2">
-                    <div className="p-1 bg-red-500/20 rounded-full">
-                      <div className="w-3 h-3 bg-red-500 rounded-full"></div>
-                    </div>
-                    <span className="font-semibold text-sm">Error</span>
-                  </div>
-                  <p className="text-red-200 text-sm">{error}</p>
-                </div>
-              )}
-            </CardContent>
-
-            {/* Confirmation Dialog */}
-            {showConfirmDialog && (
-              <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-                <div className="bg-white/10 backdrop-blur-lg border border-white/20 rounded-2xl p-6 w-full max-w-sm animate-in fade-in zoom-in duration-300">
-                  <div className="text-center mb-6">
-                    <div className="mx-auto mb-4 p-3 bg-blue-600/20 rounded-full w-fit">
-                      <QrCode className="h-8 w-8 text-blue-400" />
-                    </div>
-                    <h3 className="text-xl font-bold text-white mb-2">QR Kod Tespit Edildi</h3>
-                    <p className="text-gray-300 text-sm mb-4">Bu kod işlemi yapılsın mı?</p>
-                    <div className="bg-white/5 rounded-lg p-3 mb-4">
-                      <p className="text-xs text-gray-400 mb-1">Tespit edilen kod:</p>
-                      <p className="text-white font-mono text-sm break-all">{pendingQrCode}</p>
-                    </div>
-                    <p className="text-xs text-gray-400">
-                      İşlem türü: {scanType === 'start' ? '▶️ Başlat' : '⏹️ Bitir'}
-                    </p>
-                  </div>
-                  
-                  <div className="flex gap-3">
-                    <Button
-                      onClick={handleCancelScan}
-                      variant="outline"
-                      className="flex-1 border-white/20 text-white hover:bg-white/10 h-12"
-                      disabled={loading}
-                    >
-                      <X className="h-4 w-4 mr-2" />
-                      Hayır
-                    </Button>
-                    <Button
-                      onClick={handleConfirmScan}
-                      className="flex-1 bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 h-12"
-                      disabled={loading}
+                    
+                    <Button 
+                      type="submit" 
+                      className="w-full bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 h-12"
+                      disabled={loading || !qrCode.trim()}
                     >
                       {loading ? (
                         <>
-                          <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent mr-2" />
-                          İşleniyor...
+                          <div className="animate-spin rounded-full h-5 w-5 border-2 border-white border-t-transparent mr-3" />
+                          Processing...
                         </>
                       ) : (
                         <>
-                          <CheckCircle className="h-4 w-4 mr-2" />
-                          Evet
+                          <Scan className="h-5 w-5 mr-2" />
+                          Scan QR Code
                         </>
                       )}
                     </Button>
+                  </form>
+                )}
+
+                {/* Camera Error */}
+                {cameraError && (
+                  <div className="p-3 bg-yellow-500/20 border border-yellow-500/50 rounded-lg">
+                    <div className="flex items-start gap-2 text-yellow-400">
+                      <Camera className="h-5 w-5 mt-0.5 flex-shrink-0" />
+                      <div>
+                        <p className="font-semibold text-sm">Camera Issue</p>
+                        <p className="text-xs text-yellow-300 mt-1">{cameraError}</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                
+                {/* Success Message */}
+                {result && (
+                  <div className="p-4 bg-gradient-to-r from-green-500/20 to-emerald-500/20 border border-green-500/50 rounded-lg animate-in fade-in duration-300">
+                    <div className="flex items-center gap-3 text-green-400 mb-2">
+                      <CheckCircle className="h-6 w-6" />
+                      <span className="font-semibold">Success!</span>
+                    </div>
+                    <div className="space-y-1 text-sm">
+                      <p className="text-white font-medium">{result.message}</p>
+                      <p className="text-green-200">Process Step: {result.step_name}</p>
+                      <p className="text-green-200">Time: {new Date().toLocaleTimeString()}</p>
+                    </div>
+                  </div>
+                )}
+                
+                {/* Error Message */}
+                {error && (
+                  <div className="p-4 bg-gradient-to-r from-red-500/20 to-rose-500/20 border border-red-500/50 rounded-lg animate-in fade-in duration-300">
+                    <div className="flex items-center gap-2 text-red-400 mb-2">
+                      <div className="p-1 bg-red-500/20 rounded-full">
+                        <div className="w-3 h-3 bg-red-500 rounded-full"></div>
+                      </div>
+                      <span className="font-semibold text-sm">Error</span>
+                    </div>
+                    <p className="text-red-200 text-sm">{error}</p>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Confirmation Dialog */}
+          {showConfirmDialog && (
+            <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+              <div className="bg-white/10 backdrop-blur-lg border border-white/20 rounded-2xl p-6 w-full max-w-sm animate-in fade-in zoom-in duration-300">
+                <div className="text-center mb-6">
+                  <img 
+                    src="https://customer-assets.emergentagent.com/job_metalops/artifacts/i1dybgg7_Velar%20Makine%20Logo%20SVG.png" 
+                    alt="Velar Makine Logo" 
+                    className="h-10 w-10 object-contain mx-auto"
+                  />
+                  <h3 className="text-xl font-bold text-white mb-2">QR Kod Tespit Edildi!</h3>
+                  <p className="text-gray-300 text-sm mb-4">Bu kod için işlem yapılsın mı?</p>
+                  <div className="bg-white/5 rounded-lg p-3 mb-4">
+                    <p className="text-xs text-gray-400 mb-1">Tespit edilen kod:</p>
+                    <p className="text-white font-mono text-sm break-all">{pendingQrCode}</p>
                   </div>
                 </div>
+                
+                <div className="flex gap-3">
+                  <Button
+                    onClick={handleCancelScan}
+                    variant="outline"
+                    className="flex-1 border-white/20 text-white hover:bg-white/10 h-12"
+                    disabled={loading}
+                  >
+                    <X className="h-4 w-4 mr-2" />
+                    Hayır
+                  </Button>
+                  <Button
+                    onClick={handleConfirmScan}
+                    className="flex-1 bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 h-12"
+                    disabled={loading}
+                  >
+                    {loading ? (
+                      <>
+                        <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent mr-2" />
+                        İşleniyor...
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle className="h-4 w-4 mr-2" />
+                        Evet
+                      </>
+                    )}
+                  </Button>
+                </div>
               </div>
-            )}
-          </Card>
+            </div>
+          )}
         </div>
       </div>
     </div>
   );
 };
 
-// QR Scanner Component for Managers/Admins (keeps existing functionality)
+// QR Scanner Component for Managers/Admins
 const QRScanner = () => {
   const [qrCode, setQrCode] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [scanType, setScanType] = useState('start');
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
+  
+  // New state for process selection
+  const [workOrderData, setWorkOrderData] = useState(null);
+  const [selectedProcess, setSelectedProcess] = useState(null);
+  const [actionType, setActionType] = useState('start');
+  const [showProcessSelection, setShowProcessSelection] = useState(false);
 
-  const handleScan = async (e) => {
+  // Handle scanning a work order QR code
+  const handleWorkOrderScan = async (e) => {
     e.preventDefault();
     setLoading(true);
     setError('');
     setResult(null);
+    setWorkOrderData(null);
+    setShowProcessSelection(false);
 
     try {
-      const endpoint = scanType === 'start' ? '/scan/start' : '/scan/end';
-      const response = await axios.post(`${API}${endpoint}`, {
+      const response = await axios.post(`${API}/scan/work-order`, {
         qr_code: qrCode,
         username,
         password
       });
 
-      setResult(response.data);
+      // Set work order data and show process selection
+      setWorkOrderData(response.data);
+      setShowProcessSelection(true);
+      
+      // Clear form fields
       setQrCode('');
-      setUsername('');
-      setPassword('');
+      
     } catch (error) {
       setError(error.response?.data?.detail || 'Scan failed');
     }
@@ -607,95 +782,235 @@ const QRScanner = () => {
     setLoading(false);
   };
 
+  // Handle process action (start or end)
+  const handleProcessAction = async (e) => {
+    e.preventDefault();
+    if (!selectedProcess || !workOrderData || loading) return;
+    
+    setLoading(true);
+    setError('');
+    setResult(null);
+
+    try {
+      const response = await axios.post(`${API}/scan/process-action`, {
+        qr_code: workOrderData.qr_code,
+        username,
+        password,
+        process_index: selectedProcess.step_index,
+        action: actionType
+      });
+
+      setResult(response.data);
+      
+      // Reset process selection
+      setSelectedProcess(null);
+      setWorkOrderData(null);
+      setShowProcessSelection(false);
+      setUsername('');
+      setPassword('');
+      
+    } catch (error) {
+      setError(error.response?.data?.detail || 'Process action failed');
+    }
+
+    setLoading(false);
+  };
+
   return (
     <div className="max-w-md mx-auto space-y-6">
-      <Card className="bg-white/5 backdrop-blur-lg border-white/10">
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-white">
-            <Scan className="h-5 w-5" />
-            QR Kod Okuyucu
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={handleScan} className="space-y-4">
-            <div>
-              <Select value={scanType} onValueChange={setScanType}>
-                <SelectTrigger className="bg-white/10 border-white/20 text-white">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="start">Start Process</SelectItem>
-                  <SelectItem value="end">End Process</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            
-            <div>
-              <Input
-                type="text"
-                placeholder="QR Code (or scan with camera)"
-                value={qrCode}
-                onChange={(e) => setQrCode(e.target.value)}
-                className="bg-white/10 border-white/20 text-white placeholder:text-gray-400"
-                required
-              />
-            </div>
-            
-            <div>
-              <Input
-                type="text"
-                placeholder="Kullanıcı Adı"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                className="bg-white/10 border-white/20 text-white placeholder:text-gray-400"
-                required
-              />
-            </div>
-            
-            <div>
-              <Input
-                type="password"
-                placeholder="Şifre"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="bg-white/10 border-white/20 text-white placeholder:text-gray-400"
-                required
-              />
-            </div>
-            
-            <Button 
-              type="submit" 
-              className="w-full bg-blue-600 hover:bg-blue-700"
-              disabled={loading}
-            >
-              {loading ? 'Processing...' : (
-                <>
-                  {scanType === 'start' ? <Play className="h-4 w-4 mr-2" /> : <Pause className="h-4 w-4 mr-2" />}
-                  {scanType === 'start' ? 'Start Process' : 'End Process'}
-                </>
-              )}
-            </Button>
-          </form>
-          
-          {result && (
-            <div className="mt-4 p-4 bg-green-500/20 border border-green-500/50 rounded-lg">
-              <div className="flex items-center gap-2 text-green-400 mb-2">
-                <CheckCircle className="h-5 w-5" />
-                <span className="font-medium">Success</span>
+      {!showProcessSelection ? (
+        <Card className="bg-white/5 backdrop-blur-lg border-white/10">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-white">
+              <Scan className="h-5 w-5" />
+              QR Kod Okuyucu
+            </CardTitle>
+            <CardDescription className="text-gray-300">
+              İş emri QR kodunu tarayarak işlem yapabilirsiniz
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form onSubmit={handleWorkOrderScan} className="space-y-4">
+              <div>
+                <Input
+                  type="text"
+                  placeholder="QR Code (or scan with camera)"
+                  value={qrCode}
+                  onChange={(e) => setQrCode(e.target.value)}
+                  className="bg-white/10 border-white/20 text-white placeholder:text-gray-400"
+                  required
+                />
               </div>
-              <p className="text-white text-sm">{result.message}</p>
-              <p className="text-gray-300 text-sm">Step: {result.step_name}</p>
-              <p className="text-gray-300 text-sm">Operator: {result.operator}</p>
+              
+              <div>
+                <Input
+                  type="text"
+                  placeholder="Kullanıcı Adı"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  className="bg-white/10 border-white/20 text-white placeholder:text-gray-400"
+                  required
+                />
+              </div>
+              
+              <div>
+                <Input
+                  type="password"
+                  placeholder="Şifre"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="bg-white/10 border-white/20 text-white placeholder:text-gray-400"
+                  required
+                />
+              </div>
+              
+              <Button 
+                type="submit" 
+                className="w-full bg-blue-600 hover:bg-blue-700"
+                disabled={loading}
+              >
+                {loading ? 'Processing...' : (
+                  <>
+                    <Scan className="h-4 w-4 mr-2" />
+                    QR Kodu Tara
+                  </>
+                )}
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
+      ) : (
+        <Card className="bg-white/5 backdrop-blur-lg border-white/10">
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-white">İş Emri: {workOrderData.work_order.part_number}</CardTitle>
+              <Badge className={`${getStatusColor(workOrderData.work_order.status)} text-white`}>
+                {workOrderData.work_order.status.replace('_', ' ').toUpperCase()}
+              </Badge>
             </div>
-          )}
-          
-          {error && (
-            <div className="mt-4 p-4 bg-red-500/20 border border-red-500/50 rounded-lg">
-              <p className="text-red-400 text-sm">{error}</p>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+            <CardDescription className="text-gray-300">
+              Mevcut Adım: {workOrderData.work_order.current_step_name} ({workOrderData.work_order.current_step_index + 1}/{workOrderData.work_order.total_steps})
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form onSubmit={handleProcessAction} className="space-y-4">
+              {/* Process Selection */}
+              <div>
+                <label className="block text-sm font-medium text-white mb-2">
+                  İşlem Adımı Seçin
+                </label>
+                <Select 
+                  value={selectedProcess?.step_index.toString() || ''} 
+                  onValueChange={(value) => {
+                    const process = workOrderData.processes.find(p => p.step_index.toString() === value);
+                    setSelectedProcess(process);
+                    // Auto-select action type based on what's available
+                    if (process) {
+                      if (process.can_start) setActionType('start');
+                      else if (process.can_end) setActionType('end');
+                    }
+                  }}
+                >
+                  <SelectTrigger className="bg-white/10 border-white/20 text-white">
+                    <SelectValue placeholder="İşlem adımı seçin" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {workOrderData.processes.map((process) => (
+                      <SelectItem 
+                        key={process.step_index} 
+                        value={process.step_index.toString()}
+                        disabled={!process.can_start && !process.can_end}
+                      >
+                        {process.step_name} ({process.status})
+                        {process.can_start && process.can_end 
+                          ? ' - Başlatılabilir/Bitirilebilir' 
+                          : process.can_start 
+                            ? ' - Başlatılabilir' 
+                            : process.can_end 
+                              ? ' - Bitirilebilir' 
+                              : ' - İşlem yapılamaz'}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              
+              {/* Action Type Selection */}
+              {selectedProcess && (
+                <div>
+                  <label className="block text-sm font-medium text-white mb-2">
+                    İşlem Türü
+                  </label>
+                  <Select 
+                    value={actionType} 
+                    onValueChange={setActionType}
+                    disabled={!(selectedProcess.can_start && selectedProcess.can_end)}
+                  >
+                    <SelectTrigger className="bg-white/10 border-white/20 text-white">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {selectedProcess.can_start && (
+                        <SelectItem value="start">Başlat</SelectItem>
+                      )}
+                      {selectedProcess.can_end && (
+                        <SelectItem value="end">Bitir</SelectItem>
+                      )}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+              
+              {/* Submit Button */}
+              <Button 
+                type="submit" 
+                className="w-full bg-blue-600 hover:bg-blue-700"
+                disabled={loading || !selectedProcess}
+              >
+                {loading ? 'Processing...' : (
+                  <>
+                    {actionType === 'start' ? <Play className="h-4 w-4 mr-2" /> : <Pause className="h-4 w-4 mr-2" />}
+                    {actionType === 'start' ? 'İşlemi Başlat' : 'İşlemi Bitir'}
+                  </>
+                )}
+              </Button>
+              
+              {/* Cancel Button */}
+              <Button 
+                type="button"
+                onClick={() => {
+                  setWorkOrderData(null);
+                  setSelectedProcess(null);
+                  setShowProcessSelection(false);
+                }}
+                variant="outline"
+                className="w-full border-white/20 text-white hover:bg-white/10"
+              >
+                <X className="h-4 w-4 mr-2" />
+                İptal
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
+      )}
+      
+      {result && (
+        <div className="mt-4 p-4 bg-green-500/20 border border-green-500/50 rounded-lg">
+          <div className="flex items-center gap-2 text-green-400 mb-2">
+            <CheckCircle className="h-5 w-5" />
+            <span className="font-medium">Success</span>
+          </div>
+          <p className="text-white text-sm">{result.message}</p>
+          <p className="text-gray-300 text-sm">Step: {result.step_name}</p>
+          <p className="text-gray-300 text-sm">Operator: {result.operator}</p>
+        </div>
+      )}
+      
+      {error && (
+        <div className="mt-4 p-4 bg-red-500/20 border border-red-500/50 rounded-lg">
+          <p className="text-red-400 text-sm">{error}</p>
+        </div>
+      )}
     </div>
   );
 };
@@ -1424,7 +1739,7 @@ const QRCodes = () => {
     }
   };
 
-  // Download a PDF containing all QR codes for the selected part
+  // Download a PDF containing the QR code for the selected work order
   const handleDownloadPdf = async () => {
     if (!selectedPart) return;
     try {
@@ -1436,14 +1751,7 @@ const QRCodes = () => {
       const link = document.createElement('a');
       link.href = url;
       // Attempt to extract filename from Content-Disposition header
-      let filename = `qr_codes_${selectedPart}.pdf`;
-      const disposition = response.headers && response.headers['content-disposition'];
-      if (disposition && disposition.includes('filename=')) {
-        const matched = disposition.match(/filename=([^;]+)/);
-        if (matched && matched[1]) {
-          filename = matched[1].trim().replace(/\"/g, '');
-        }
-      }
+      let filename = `Is_Emri_QR_Kodu.pdf`; 
       link.download = filename;
       document.body.appendChild(link);
       link.click();
@@ -1461,6 +1769,9 @@ const QRCodes = () => {
       <Card className="bg-white/5 backdrop-blur-lg border-white/10">
         <CardHeader>
           <CardTitle className="text-white">İş Emri İçin QR Kod Üret</CardTitle>
+          <CardDescription className="text-gray-300">
+            Her iş emri için tek bir QR kod oluşturulur. Bu kod, iş emrinin tüm süreçleri boyunca kullanılabilir.
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <Select value={selectedPart} onValueChange={handlePartChange}>
@@ -1476,7 +1787,7 @@ const QRCodes = () => {
             </SelectContent>
           </Select>
         </CardContent>
-        </Card>
+      </Card>
 
       {/* PDF Download Button */}
       {selectedPart && qrCodes.length > 0 && (
@@ -1492,7 +1803,7 @@ const QRCodes = () => {
       )}
       
       {loading && (
-        <div className="text-center text-white">Loading QR codes...</div>
+        <div className="text-center text-white">QR kodları yükleniyor...</div>
       )}
       
       <div className="grid gap-6">
@@ -1500,28 +1811,61 @@ const QRCodes = () => {
           <Card key={index} className="bg-white/5 backdrop-blur-lg border-white/10">
             <CardHeader>
               <div className="flex items-center justify-between">
-                <CardTitle className="text-white">{qrData.step_name}</CardTitle>
-                <Badge className={`${getStatusColor(qrData.status)} text-white`}>
-                  {qrData.status.replace('_', ' ').toUpperCase()}
+                <div>
+                  <CardTitle className="text-white">İş Emri: {qrData.work_order.part_number}</CardTitle>
+                  <CardDescription className="text-gray-300 mt-1">
+                    Mevcut Adım: {qrData.work_order.current_step_name} ({qrData.work_order.current_step_index + 1}/{qrData.work_order.total_steps})
+                  </CardDescription>
+                </div>
+                <Badge className={`${getStatusColor(qrData.work_order.status)} text-white`}>
+                  {qrData.work_order.status.replace('_', ' ').toUpperCase()}
                 </Badge>
               </div>
             </CardHeader>
             <CardContent>
-              <div className="grid md:grid-cols-2 gap-6">
-                <div className="text-center">
-                  <h4 className="text-green-400 font-medium mb-2">Başlangıç QR Code</h4>
-                  <div className="bg-white p-4 rounded-lg inline-block">
-                    <img src={qrData.start_qr.image} alt="Start QR" className="w-32 h-32" />
-                  </div>
-                  <p className="text-xs text-gray-400 mt-2 break-all">{qrData.start_qr.code}</p>
+              <div className="flex flex-col items-center justify-center">
+                <h4 className="text-blue-400 font-medium mb-4">İş Emri QR Kodu</h4>
+                <div className="bg-white p-6 rounded-lg inline-block">
+                  <img src={qrData.qr_code.image} alt="Work Order QR" className="w-48 h-48" />
                 </div>
+                <p className="text-xs text-gray-400 mt-4 break-all">{qrData.qr_code.code}</p>
                 
-                <div className="text-center">
-                  <h4 className="text-red-400 font-medium mb-2">Bitiş QR Code</h4>
-                  <div className="bg-white p-4 rounded-lg inline-block">
-                    <img src={qrData.end_qr.image} alt="End QR" className="w-32 h-32" />
+                <div className="mt-8 w-full">
+                  <h4 className="text-white font-medium mb-2">İş Akış Adımları:</h4>
+                  <div className="space-y-2 mt-4">
+                    {qrData.process_steps.map((step, stepIndex) => (
+                      <div 
+                        key={stepIndex} 
+                        className={`p-3 rounded-lg border ${
+                          step.step_index === qrData.work_order.current_step_index 
+                            ? 'bg-blue-600/20 border-blue-500/50' 
+                            : step.status === 'completed' 
+                              ? 'bg-green-600/20 border-green-500/50' 
+                              : 'bg-white/5 border-white/20'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-3">
+                            <span className="text-xs bg-white/10 rounded-full h-6 w-6 flex items-center justify-center text-white">
+                              {step.step_index + 1}
+                            </span>
+                            <span className={`${
+                              step.step_index === qrData.work_order.current_step_index 
+                                ? 'text-blue-300 font-medium' 
+                                : step.status === 'completed' 
+                                  ? 'text-green-300' 
+                                  : 'text-white'
+                            }`}>
+                              {step.step_name}
+                            </span>
+                          </div>
+                          <Badge className={`${getStatusColor(step.status)} text-white`}>
+                            {step.status.replace('_', ' ').toUpperCase()}
+                          </Badge>
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                  <p className="text-xs text-gray-400 mt-2 break-all">{qrData.end_qr.code}</p>
                 </div>
               </div>
             </CardContent>

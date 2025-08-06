@@ -111,10 +111,28 @@ class ProcessInstance(BaseModel):
     end_qr_code: str = Field(default_factory=lambda: str(uuid.uuid4()))
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
+class WorkOrderQRCode(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    part_id: str
+    qr_code: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
 class QRScanRequest(BaseModel):
     qr_code: str
     username: str
     password: str
+    
+class WorkOrderScanRequest(BaseModel):
+    qr_code: str
+    username: str
+    password: str
+    
+class ProcessActionRequest(BaseModel):
+    qr_code: str
+    username: str
+    password: str
+    process_index: int
+    action: str  # "start" or "end"
 
 # Create the main app
 app = FastAPI(title="Production Tracking System")
@@ -322,6 +340,10 @@ async def create_part(part_data: PartCreate, current_user: User = Depends(get_cu
         )
         await db.process_instances.insert_one(process_instance.dict())
     
+    # Create a single QR code for the entire work order
+    work_order_qr = WorkOrderQRCode(part_id=part.id)
+    await db.work_order_qr_codes.insert_one(work_order_qr.dict())
+    
     return part
 
 @api_router.get("/parts", response_model=List[Part])
@@ -366,29 +388,52 @@ async def delete_part(part_id: str, current_user: User = Depends(get_current_use
 # QR Code Routes
 @api_router.get("/parts/{part_id}/qr-codes")
 async def get_part_qr_codes(part_id: str, current_user: User = Depends(get_current_user)):
-    process_instances = await db.process_instances.find({"part_id": part_id}).to_list(100)
+    # Get the work order QR code
+    work_order_qr = await db.work_order_qr_codes.find_one({"part_id": part_id})
     
-    qr_codes = []
-    for pi in process_instances:
-        process = ProcessInstance(**pi)
-        start_qr_data = generate_qr_code(process.start_qr_code)
-        end_qr_data = generate_qr_code(process.end_qr_code)
-        
-        qr_codes.append({
-            "step_name": process.step_name,
-            "step_index": process.step_index,
-            "status": process.status,
-            "start_qr": {
-                "code": process.start_qr_code,
-                "image": start_qr_data
-            },
-            "end_qr": {
-                "code": process.end_qr_code,
-                "image": end_qr_data
-            }
-        })
+    # If no QR code exists yet for this work order, create one
+    if not work_order_qr:
+        work_order_qr = WorkOrderQRCode(part_id=part_id)
+        await db.work_order_qr_codes.insert_one(work_order_qr.dict())
+        work_order_qr = await db.work_order_qr_codes.find_one({"part_id": part_id})
     
-    return qr_codes
+    # Get part and process information
+    part = await db.parts.find_one({"id": part_id})
+    if not part:
+        raise HTTPException(status_code=404, detail="Part not found")
+    
+    process_instances = await db.process_instances.find({"part_id": part_id}).sort("step_index", 1).to_list(100)
+    
+    # Get current step information
+    current_step_index = part["current_step_index"]
+    current_step_name = "Not started"
+    if process_instances and current_step_index < len(process_instances):
+        current_step_name = process_instances[current_step_index]["step_name"]
+    
+    # Generate QR code image
+    qr_image = generate_qr_code(work_order_qr["qr_code"])
+    
+    # Return the single QR code with work order information
+    return [{
+        "work_order": {
+            "part_number": part["part_number"],
+            "current_step_index": current_step_index,
+            "total_steps": len(process_instances),
+            "current_step_name": current_step_name,
+            "status": part["status"]
+        },
+        "qr_code": {
+            "code": work_order_qr["qr_code"],
+            "image": qr_image
+        },
+        "process_steps": [
+            {
+                "step_name": pi["step_name"],
+                "step_index": pi["step_index"],
+                "status": pi["status"]
+            } for pi in process_instances
+        ]
+    }]
 
 # ---------------------------------------------------------------------------
 # QR Code PDF Export Route
@@ -400,195 +445,178 @@ async def get_part_qr_codes(part_id: str, current_user: User = Depends(get_curre
 @api_router.get("/parts/{part_id}/qr-codes/pdf")
 async def get_part_qr_codes_pdf(part_id: str, current_user: User = Depends(get_current_user)):
     """
-    Generate a PDF document containing all QR codes for the specified part (work order).
+    Generate a PDF document containing the single QR code for the specified work order.
 
-    This endpoint dynamically lays out the QR codes across multiple pages if needed. Each
-    process step is rendered on its own row with the step name, start QR code, end QR
-    code, and their corresponding labels. The PDF is formatted for A4 paper at 300 DPI
-    and designed to be printed for operators to scan.
+    This endpoint creates a PDF with the work order information and a single QR code
+    that can be used throughout the entire lifecycle of the work order. The PDF is 
+    formatted for A4 paper at 300 DPI and designed to be printed for operators to scan.
 
     The resulting file is named according to the pattern:
-      "(<work_order_number>) - Work Order QR Codes.pdf"
+      "(<work_order_number>) - Work Order QR Code.pdf"
 
     where <work_order_number> is retrieved from the part's `part_number` field. If the
     part is not found, the `part_id` is used instead.
     """
-    # Fetch all process instances for the specified part
-    process_instances = await db.process_instances.find({"part_id": part_id}).to_list(100)
+    # Get the work order QR code
+    work_order_qr = await db.work_order_qr_codes.find_one({"part_id": part_id})
+    
+    # If no QR code exists yet for this work order, create one
+    if not work_order_qr:
+        work_order_qr = WorkOrderQRCode(part_id=part_id)
+        await db.work_order_qr_codes.insert_one(work_order_qr.dict())
+        work_order_qr = await db.work_order_qr_codes.find_one({"part_id": part_id})
+    
+    # Get part information
+    part = await db.parts.find_one({"id": part_id})
+    if not part:
+        raise HTTPException(status_code=404, detail="Part not found")
+    
+    # Get project information
+    project = await db.projects.find_one({"id": part["project_id"]})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    
+    # Get process instances
+    process_instances = await db.process_instances.find({"part_id": part_id}).sort("step_index", 1).to_list(100)
     if not process_instances:
         raise HTTPException(status_code=404, detail="No process instances found for this part")
 
-    # Build a list of items with step name and generated QR images
-    items = []  # Each entry: (step_name, start_code, end_code, start_img, end_img)
-    for pi in process_instances:
-        process = ProcessInstance(**pi)
-        # Generate PIL images for start and end QR codes using the existing helper
-        start_data_url = generate_qr_code(process.start_qr_code)
-        end_data_url = generate_qr_code(process.end_qr_code)
-        try:
-            start_base64 = start_data_url.split(",", 1)[1]
-            end_base64 = end_data_url.split(",", 1)[1]
-            start_bytes = base64.b64decode(start_base64)
-            end_bytes = base64.b64decode(end_base64)
-            start_img = Image.open(BytesIO(start_bytes)).convert("RGB")
-            end_img = Image.open(BytesIO(end_bytes)).convert("RGB")
-        except Exception:
-            # Skip this process step if decoding fails
-            continue
-        items.append((process.step_name, process.start_qr_code, process.end_qr_code, start_img, end_img))
-
-
-    # Sort items by step index if available to preserve process order.
-    # We assume that process_instances are in the correct order by default, but in case
-    # they are not, we attempt to sort by the `step_index` attribute. We cannot
-    # access `step_index` directly from `items`, so we build a mapping from
-    # start_code/end_code to step_index based on the original `process_instances` list.
+    # Generate QR code image
+    qr_data_url = generate_qr_code(work_order_qr["qr_code"])
     try:
-        # Create a lookup of start_qr_code to step_index
-        index_lookup = {pi["start_qr_code"]: pi["step_index"] for pi in process_instances}
-        items.sort(key=lambda t: index_lookup.get(t[1], 0))
+        qr_base64 = qr_data_url.split(",", 1)[1]
+        qr_bytes = base64.b64decode(qr_base64)
+        qr_img = Image.open(BytesIO(qr_bytes)).convert("RGB")
     except Exception:
-        pass  # If sorting fails, proceed with the existing order
+        raise HTTPException(status_code=500, detail="Failed to generate QR code image")
 
-    # ----------------------------------------------------------------------
-    # New layout implementation: divide the page into two columns, each with
-    # exactly 10 rows. This layout avoids overlapping of text and QR codes by
-    # using fixed row heights and truncating long strings. QR code sizes and
-    # font sizes are computed based on the row height, with upper bounds to
-    # ensure readability. Each process step is drawn into the appropriate
-    # column and row. If more than 20 process steps exist, additional pages
-    # are created automatically.
-    # ----------------------------------------------------------------------
+    # Download and process Velar Makine logo
+    logo_img = None
+    try:
+        import urllib.request
+        with urllib.request.urlopen("https://customer-assets.emergentagent.com/job_metalops/artifacts/i1dybgg7_Velar%20Makine%20Logo%20SVG.png") as response:
+            logo_data = response.read()
+            logo_img = Image.open(BytesIO(logo_data)).convert("RGBA")
+    except Exception:
+        # Logo loading failed, continue without logo
+        pass
+
     # Define page dimensions (A4 at 300 DPI)
     page_width = 2480
     page_height = 3508
-    margin = 80
-    rows_per_column = 10
-    columns = 2
-    available_height = page_height - 2 * margin
-    row_height = available_height // rows_per_column
-
-    # Compute font sizes. Title and label fonts are capped to avoid
-    # becoming too large when there are fewer items. The QR size is
-    # calculated so that the title, QR codes and labels fit within the row.
-    tentative_title = max(16, int(row_height * 0.15))
-    tentative_label = max(10, int(row_height * 0.08))
-    title_font_size = min(32, tentative_title)
-    label_font_size = min(18, tentative_label)
-    vertical_padding = 40
-    qr_size = row_height - (title_font_size + 2 * label_font_size + vertical_padding)
-    if qr_size < 80:
-        qr_size = 80
-    line_spacing = max(2, int(label_font_size * 0.2))
-
+    margin = 120
+    header_height = 150
+    
+    # Create a blank page
+    page_img = Image.new('RGB', (page_width, page_height), 'white')
+    draw_page = ImageDraw.Draw(page_img)
+    
     # Load fonts with fallback to default
     try:
-        font_title = ImageFont.truetype("DejaVuSans-Bold.ttf", title_font_size)
+        font_title = ImageFont.truetype("DejaVuSans-Bold.ttf", 60)
+        font_subtitle = ImageFont.truetype("DejaVuSans-Bold.ttf", 40)
+        font_header = ImageFont.truetype("DejaVuSans-Bold.ttf", 36)  # For system title
+        font_info = ImageFont.truetype("DejaVuSans.ttf", 32)
+        font_steps_title = ImageFont.truetype("DejaVuSans-Bold.ttf", 48)  # ENLARGED from 36 to 48
+        font_steps = ImageFont.truetype("DejaVuSans.ttf", 38)  # ENLARGED from 28 to 38
+        font_date = ImageFont.truetype("DejaVuSans.ttf", 28)
     except Exception:
         font_title = ImageFont.load_default()
+        font_subtitle = ImageFont.load_default()
+        font_header = ImageFont.load_default()
+        font_info = ImageFont.load_default()
+        font_steps_title = ImageFont.load_default()
+        font_steps = ImageFont.load_default()
+        font_date = ImageFont.load_default()
+    
+    # Draw header section
+    current_y = margin
+    
+    # Draw logo in top left corner (if available) - SIGNIFICANTLY ENLARGED
+    if logo_img:
+        logo_size = 160  # Height of logo - DOUBLED from 80 to 160
+        # Calculate width maintaining aspect ratio
+        logo_aspect_ratio = logo_img.width / logo_img.height
+        logo_width = int(logo_size * logo_aspect_ratio)
+        
+        # Resize logo
+        logo_resized = logo_img.resize((logo_width, logo_size), Image.LANCZOS)
+        
+        # Create a white background for the logo (in case it has transparency)
+        logo_bg = Image.new('RGB', (logo_width, logo_size), 'white')
+        if logo_resized.mode == 'RGBA':
+            logo_bg.paste(logo_resized, (0, 0), logo_resized)
+        else:
+            logo_bg.paste(logo_resized, (0, 0))
+        
+        page_img.paste(logo_bg, (margin, current_y))
+        logo_right_edge = margin + logo_width + 40  # Increased padding for larger logo
+    else:
+        logo_right_edge = margin
+    
+    # Draw system title next to logo
+    system_title = "Velar Makine Üretim Takip Sistemi"
+    draw_page.text((logo_right_edge, current_y + 25), system_title, fill=(0, 0, 0), font=font_header)
+    
+    # Draw current date in top right corner
+    from datetime import datetime
+    current_date = datetime.now().strftime("%d/%m/%Y")
+    date_text = f"Tarih: {current_date}"
+    date_width = draw_page.textlength(date_text, font=font_date)
+    draw_page.text((page_width - margin - date_width, current_y + 25), date_text, fill=(0, 0, 0), font=font_date)
+    
+    # Move down after header
+    current_y += header_height
+    
+    # Draw work order title
+    title = f"İş Emri: {part['part_number']}"
+    draw_page.text((margin, current_y), title, fill=(0, 0, 0), font=font_title)
+    current_y += 80
+    
+    # Draw project info
+    project_info = f"Proje: {project['name']}"
+    draw_page.text((margin, current_y), project_info, fill=(0, 0, 0), font=font_subtitle)
+    current_y += 80
+    
+    # Draw QR code (large, centered)
+    qr_size = 800
     try:
-        font_label = ImageFont.truetype("DejaVuSans.ttf", label_font_size)
+        resized_qr = qr_img.resize((qr_size, qr_size), resample=Image.NEAREST)
     except Exception:
-        font_label = ImageFont.load_default()
-
-    # Prepare the step name: truncate long names to a single line with ellipsis
-    def prepare_step_name(name: str, max_chars: int = 30) -> str:
-        if not name:
-            return ""
-        if len(name) <= max_chars:
-            return name
-        return name[:max_chars - 3] + '...'
-
-    # Wrap codes into at most two lines. If the code is longer than
-    # permitted, truncate and append an ellipsis. Only the first line
-    # contains the prefix (e.g., 'Başlangıç:' or 'Bitiş:').
-    def wrap_code(prefix: str, code: str, max_chars: int = 18, max_lines: int = 2) -> List[str]:
-        if not code:
-            return [prefix]
-        lines: List[str] = []
-        first_available = max_chars - len(prefix) - 1
-        first_segment = code[:first_available]
-        lines.append(f"{prefix} {first_segment}")
-        remaining = code[first_available:]
-        for i in range(0, len(remaining), max_chars):
-            segment = remaining[i:i + max_chars]
-            lines.append(segment)
-            if len(lines) >= max_lines:
-                if i + max_chars < len(remaining):
-                    lines[-1] = lines[-1][:-3] + '...'
-                break
-        return lines
-
-    # Generate pages
-    pages: List[Image.Image] = []
-    for page_start in range(0, len(items), rows_per_column * columns):
-        page_items = items[page_start: page_start + rows_per_column * columns]
-        # Create a blank page
-        page_img = Image.new('RGB', (page_width, page_height), 'white')
-        draw_page = ImageDraw.Draw(page_img)
-        # Draw vertical separator line
-        mid_x = page_width // 2
-        line_thickness = 4
-        draw_page.line([(mid_x, 0), (mid_x, page_height)], fill=(0, 0, 0), width=line_thickness)
-        # Draw each item
-        for idx, (step_name, start_code, end_code, start_img, end_img) in enumerate(page_items):
-            col = idx // rows_per_column
-            row = idx % rows_per_column
-            x_offset = margin if col == 0 else mid_x + margin
-            y_offset = margin + row * row_height
-            # Draw the truncated step name
-            name_display = prepare_step_name(step_name, max_chars=30)
-            # Determine title height using font metrics if available
-            if hasattr(font_title, 'getbbox'):
-                bbox = font_title.getbbox(name_display)
-                title_height = bbox[3] - bbox[1]
-            else:
-                title_height = title_font_size
-            draw_page.text((x_offset, y_offset), name_display, fill=(0, 0, 0), font=font_title)
-            # Position for QR codes
-            y_qr = y_offset + title_height + 5
-            # Draw start QR
-            if start_img:
-                try:
-                    resized_start = start_img.resize((qr_size, qr_size), resample=Image.NEAREST)
-                except Exception:
-                    resized_start = start_img.resize((qr_size, qr_size))
-                page_img.paste(resized_start, (x_offset, y_qr))
-            # Draw end QR
-            spacing_between_qrs = 10
-            x_end = x_offset + qr_size + spacing_between_qrs
-            if end_img:
-                try:
-                    resized_end = end_img.resize((qr_size, qr_size), resample=Image.NEAREST)
-                except Exception:
-                    resized_end = end_img.resize((qr_size, qr_size))
-                page_img.paste(resized_end, (x_end, y_qr))
-            # Prepare labels
-            start_lines = wrap_code("Başlangıç:", start_code, max_chars=18, max_lines=2)
-            end_lines = wrap_code("Bitiş:", end_code, max_chars=18, max_lines=2)
-            max_label_lines = max(len(start_lines), len(end_lines))
-            y_label_start = y_qr + qr_size + 5
-            for line_idx in range(max_label_lines):
-                st = start_lines[line_idx] if line_idx < len(start_lines) else ""
-                et = end_lines[line_idx] if line_idx < len(end_lines) else ""
-                draw_page.text((x_offset, y_label_start + line_idx * (label_font_size + line_spacing)), st, fill=(0, 0, 0), font=font_label)
-                draw_page.text((x_end, y_label_start + line_idx * (label_font_size + line_spacing)), et, fill=(0, 0, 0), font=font_label)
-        pages.append(page_img)
-
+        resized_qr = qr_img.resize((qr_size, qr_size))
+    
+    qr_x = (page_width - qr_size) // 2
+    qr_y = current_y + 20
+    page_img.paste(resized_qr, (qr_x, qr_y))
+    
+    # Draw QR code value
+    qr_code_text = f"QR Kod: {work_order_qr['qr_code']}"
+    text_width = draw_page.textlength(qr_code_text, font=font_info)
+    qr_text_y = qr_y + qr_size + 40
+    draw_page.text(((page_width - text_width) // 2, qr_text_y), qr_code_text, fill=(0, 0, 0), font=font_info)
+    
+    # Draw process steps with larger fonts
+    steps_y = qr_text_y + 80
+    steps_title = "İş Akış Adımları:"
+    draw_page.text((margin, steps_y), steps_title, fill=(0, 0, 0), font=font_steps_title)
+    
+    # List all process steps with increased spacing and font size
+    y_offset = steps_y + 70  # Increased from 60 to 70 for better spacing with larger title
+    line_spacing = 55  # Increased from 45 to 55 for better readability with larger fonts
+    for i, pi in enumerate(process_instances):
+        step_text = f"{i+1}. {pi['step_name']}"
+        draw_page.text((margin + 40, y_offset + i * line_spacing), step_text, fill=(0, 0, 0), font=font_steps)
+    
+    # Note: Removed the "Mevcut Adım" (current step) section as requested
+    
     # Create PDF in memory
     pdf_buffer = BytesIO()
-    if pages:
-        pages[0].save(pdf_buffer, format='PDF', save_all=True, append_images=pages[1:], resolution=300.0)
-    else:
-        blank_page = Image.new('RGB', (page_width, page_height), 'white')
-        blank_page.save(pdf_buffer, format='PDF', resolution=300.0)
+    page_img.save(pdf_buffer, format='PDF', resolution=300.0)
     pdf_buffer.seek(0)
 
-    # Determine file name based on part number
-    part_doc = await db.parts.find_one({"id": part_id})
-    part_number = part_doc.get("part_number") if part_doc else None
-    work_order_number = part_number or part_id
-    filename = f"({work_order_number}) - Work Order QR Codes.pdf"
+    # Determine file name based on work order number (part_number)
+    work_order_number = part.get("part_number") or part_id
+    filename = f"{work_order_number} - Is Emri QR Kodu.pdf"
 
     return Response(
         content=pdf_buffer.getvalue(),
@@ -597,6 +625,237 @@ async def get_part_qr_codes_pdf(part_id: str, current_user: User = Depends(get_c
     )
 
 # QR Scanning Routes with Session-Based Authentication
+@api_router.post("/scan/work-order")
+async def scan_work_order_qr(scan_data: WorkOrderScanRequest, current_user: User = Depends(get_current_user)):
+    """
+    Scan a work order QR code and return information about the work order and available processes.
+    """
+    # Use session user if password indicates session authentication
+    if scan_data.password == "session_authenticated":
+        user = {
+            "id": current_user.id,
+            "username": current_user.username,
+            "role": current_user.role
+        }
+    else:
+        # Authenticate user via username/password
+        user_doc = await db.users.find_one({"username": scan_data.username})
+        if not user_doc or not verify_password(scan_data.password, user_doc["password_hash"]):
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+        user = user_doc
+    
+    # Find work order QR code
+    work_order_qr = await db.work_order_qr_codes.find_one({"qr_code": scan_data.qr_code})
+    if not work_order_qr:
+        raise HTTPException(status_code=404, detail="QR code not found")
+    
+    # Get part information
+    part = await db.parts.find_one({"id": work_order_qr["part_id"]})
+    if not part:
+        raise HTTPException(status_code=404, detail="Work order not found")
+    
+    # Get process instances
+    process_instances = await db.process_instances.find({"part_id": part["id"]}).sort("step_index", 1).to_list(100)
+    
+    # Get current step information
+    current_step_index = part["current_step_index"]
+    current_step_name = "Not started"
+    if process_instances and current_step_index < len(process_instances):
+        current_step_name = process_instances[current_step_index]["step_name"]
+    
+    # Determine which processes can be started or ended based on the workflow rules
+    available_processes = []
+    for pi in process_instances:
+        process = ProcessInstance(**pi)
+        can_start = False
+        can_end = False
+        
+        # A process can be started if:
+        # 1. It's the current step and in PENDING status
+        # 2. All previous steps are COMPLETED
+        if process.step_index == current_step_index and process.status == ProcessStatus.PENDING:
+            # Check if all previous steps are completed
+            all_previous_completed = True
+            for prev_pi in process_instances:
+                if prev_pi["step_index"] < process.step_index and prev_pi["status"] != ProcessStatus.COMPLETED:
+                    all_previous_completed = False
+                    break
+            
+            can_start = all_previous_completed
+        
+        # A process can be ended if it's in IN_PROGRESS status
+        if process.status == ProcessStatus.IN_PROGRESS:
+            can_end = True
+        
+        available_processes.append({
+            "step_index": process.step_index,
+            "step_name": process.step_name,
+            "status": process.status,
+            "can_start": can_start,
+            "can_end": can_end
+        })
+    
+    return {
+        "work_order": {
+            "id": part["id"],
+            "part_number": part["part_number"],
+            "current_step_index": current_step_index,
+            "current_step_name": current_step_name,
+            "status": part["status"],
+            "total_steps": len(process_instances)
+        },
+        "processes": available_processes,
+        "qr_code": work_order_qr["qr_code"],
+        "operator": user["username"]
+    }
+
+@api_router.post("/scan/process-action")
+async def process_action(action_data: ProcessActionRequest, current_user: User = Depends(get_current_user)):
+    """
+    Perform a start or end action on a specific process within a work order.
+    """
+    # Use session user if password indicates session authentication
+    if action_data.password == "session_authenticated":
+        user = {
+            "id": current_user.id,
+            "username": current_user.username,
+            "role": current_user.role
+        }
+    else:
+        # Authenticate user via username/password
+        user_doc = await db.users.find_one({"username": action_data.username})
+        if not user_doc or not verify_password(action_data.password, user_doc["password_hash"]):
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+        user = user_doc
+    
+    # Find work order QR code
+    work_order_qr = await db.work_order_qr_codes.find_one({"qr_code": action_data.qr_code})
+    if not work_order_qr:
+        raise HTTPException(status_code=404, detail="QR code not found")
+    
+    # Get part information
+    part = await db.parts.find_one({"id": work_order_qr["part_id"]})
+    if not part:
+        raise HTTPException(status_code=404, detail="Work order not found")
+    
+    # Get process instances
+    process_instances = await db.process_instances.find({"part_id": part["id"]}).sort("step_index", 1).to_list(100)
+    
+    # Find the specific process instance
+    target_process = None
+    for pi in process_instances:
+        if pi["step_index"] == action_data.process_index:
+            target_process = ProcessInstance(**pi)
+            break
+    
+    if not target_process:
+        raise HTTPException(status_code=404, detail="Process not found")
+    
+    # Handle start action
+    if action_data.action == "start":
+        # Check if this step can be started (sequential enforcement)
+        if target_process.step_index > 0:
+            # Check if previous step is completed
+            prev_process = None
+            for pi in process_instances:
+                if pi["step_index"] == target_process.step_index - 1:
+                    prev_process = pi
+                    break
+            
+            if not prev_process or prev_process["status"] != ProcessStatus.COMPLETED:
+                raise HTTPException(status_code=400, detail="Previous step must be completed first")
+        
+        # Check if already started
+        if target_process.status == ProcessStatus.IN_PROGRESS:
+            raise HTTPException(status_code=400, detail="Process already started")
+        
+        if target_process.status == ProcessStatus.COMPLETED:
+            raise HTTPException(status_code=400, detail="Process already completed")
+        
+        # Start the process
+        now = datetime.utcnow()
+        await db.process_instances.update_one(
+            {"id": target_process.id},
+            {
+                "$set": {
+                    "status": ProcessStatus.IN_PROGRESS,
+                    "operator_id": user["id"],
+                    "start_time": now
+                }
+            }
+        )
+        
+        # Update part status
+        await db.parts.update_one(
+            {"id": part["id"]},
+            {
+                "$set": {
+                    "current_step_index": target_process.step_index,
+                    "status": ProcessStatus.IN_PROGRESS
+                }
+            }
+        )
+        
+        return {
+            "message": "Process started successfully",
+            "step_name": target_process.step_name,
+            "operator": user["username"],
+            "start_time": now
+        }
+    
+    # Handle end action
+    elif action_data.action == "end":
+        # Check if process was started
+        if target_process.status != ProcessStatus.IN_PROGRESS:
+            raise HTTPException(status_code=400, detail="Process must be started first")
+        
+        # Complete the process
+        now = datetime.utcnow()
+        await db.process_instances.update_one(
+            {"id": target_process.id},
+            {
+                "$set": {
+                    "status": ProcessStatus.COMPLETED,
+                    "end_time": now
+                }
+            }
+        )
+        
+        # Update part status
+        if target_process.step_index == len(process_instances) - 1:
+            # This was the last step
+            await db.parts.update_one(
+                {"id": part["id"]},
+                {
+                    "$set": {
+                        "status": ProcessStatus.COMPLETED,
+                        "current_step_index": target_process.step_index
+                    }
+                }
+            )
+        else:
+            # Update current step index to the next step
+            await db.parts.update_one(
+                {"id": part["id"]},
+                {
+                    "$set": {
+                        "current_step_index": target_process.step_index + 1,
+                        "status": ProcessStatus.IN_PROGRESS
+                    }
+                }
+            )
+        
+        return {
+            "message": "Process completed successfully",
+            "step_name": target_process.step_name,
+            "operator": user["username"],
+            "end_time": now
+        }
+    
+    else:
+        raise HTTPException(status_code=400, detail="Invalid action. Must be 'start' or 'end'")
+
+# Keep the old endpoints for backward compatibility
 @api_router.post("/scan/start")
 async def scan_start_qr(scan_data: QRScanRequest, current_user: User = Depends(get_current_user)):
     # Use session user if password indicates session authentication
@@ -616,6 +875,10 @@ async def scan_start_qr(scan_data: QRScanRequest, current_user: User = Depends(g
     # Find process instance
     process_instance = await db.process_instances.find_one({"start_qr_code": scan_data.qr_code})
     if not process_instance:
+        # Try to find if this is a work order QR code
+        work_order_qr = await db.work_order_qr_codes.find_one({"qr_code": scan_data.qr_code})
+        if work_order_qr:
+            raise HTTPException(status_code=400, detail="This is a work order QR code. Please use the new interface.")
         raise HTTPException(status_code=404, detail="QR code not found")
     
     process = ProcessInstance(**process_instance)
@@ -676,6 +939,10 @@ async def scan_end_qr(scan_data: QRScanRequest, current_user: User = Depends(get
     # Find process instance
     process_instance = await db.process_instances.find_one({"end_qr_code": scan_data.qr_code})
     if not process_instance:
+        # Try to find if this is a work order QR code
+        work_order_qr = await db.work_order_qr_codes.find_one({"qr_code": scan_data.qr_code})
+        if work_order_qr:
+            raise HTTPException(status_code=400, detail="This is a work order QR code. Please use the new interface.")
         raise HTTPException(status_code=404, detail="QR code not found")
     
     process = ProcessInstance(**process_instance)
