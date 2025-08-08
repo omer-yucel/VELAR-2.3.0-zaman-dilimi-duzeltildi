@@ -171,12 +171,25 @@ def generate_qr_code(data: str) -> str:
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
     try:
         payload = jwt.decode(credentials.credentials, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        
+        # Check if token is expired
+        exp = payload.get("exp")
+        if exp is None:
+            raise HTTPException(status_code=401, detail="Token has no expiration")
+        
+        if datetime.utcnow() > datetime.fromtimestamp(exp):
+            raise HTTPException(status_code=401, detail="Token has expired")
+            
         user = await db.users.find_one({"id": payload["user_id"]})
         if user is None:
-            raise HTTPException(status_code=401, detail="Invalid token")
+            raise HTTPException(status_code=401, detail="User not found")
         return User(**user)
-    except jwt.PyJWTError:
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token has expired")
+    except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid token")
+    except Exception as e:
+        raise HTTPException(status_code=401, detail=f"Authentication error: {str(e)}")
 
 # Authentication Routes
 @api_router.post("/auth/register")
@@ -222,6 +235,21 @@ async def login_user(login_data: UserLogin):
             "id": user["id"],
             "username": user["username"],
             "role": user["role"]
+        }
+    }
+
+# NEW: Session verification endpoint
+@api_router.get("/auth/verify")
+async def verify_session(current_user: User = Depends(get_current_user)):
+    """
+    Verify the current user's session and return user information.
+    This endpoint is used to validate tokens and restore user sessions after page refresh.
+    """
+    return {
+        "user": {
+            "id": current_user.id,
+            "username": current_user.username,
+            "role": current_user.role
         }
     }
 

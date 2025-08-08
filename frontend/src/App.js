@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import './App.css';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './components/ui/card';
 import { Button } from './components/ui/button';
@@ -8,7 +8,7 @@ import { Input } from './components/ui/input';
 import { Badge } from './components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './components/ui/select';
-import { QrCode, Factory, Scan, Users, BarChart3, Settings, LogOut, Camera, CheckCircle, Clock, Play, Pause, Plus, X, ChevronUp, ChevronDown, List, Database, Download } from 'lucide-react';
+import { QrCode, Factory, Scan, Users, BarChart3, Settings, LogOut, Camera, CheckCircle, Clock, Play, Pause, Plus, X, ChevronUp, ChevronDown, List, Database, Download, Loader2 } from 'lucide-react';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
@@ -18,21 +18,64 @@ const AuthContext = React.createContext();
 
 const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
-  const [token, setToken] = useState(localStorage.getItem('token'));
+  const [token, setToken] = useState(localStorage.getItem('token')); // Changed to localStorage for persistence
+  const [loading, setLoading] = useState(true); // Add loading state for initial auth check
 
-  useEffect(() => {
-    if (token) {
-      axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-      // You could verify token here
+  // Function to verify token and get user data
+  const verifyToken = useCallback(async (authToken) => {
+    if (!authToken) {
+      setLoading(false);
+      return;
     }
-  }, [token]);
+
+    try {
+      // Set the token in axios headers
+      axios.defaults.headers.common['Authorization'] = `Bearer ${authToken}`;
+      
+      // Call the verify endpoint to get user data
+      const response = await axios.get(`${API}/auth/verify`);
+      setUser(response.data.user);
+    } catch (error) {
+      console.error('Token verification failed:', error);
+      // If token is invalid, clear it
+      localStorage.removeItem('token');
+      setToken(null);
+      delete axios.defaults.headers.common['Authorization'];
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  // Check token on initial load
+  useEffect(() => {
+    verifyToken(token);
+  }, [token, verifyToken]);
+
+  // Set up axios interceptor to handle 401 errors (token expired)
+  useEffect(() => {
+    const interceptor = axios.interceptors.response.use(
+      response => response,
+      error => {
+        if (error.response && error.response.status === 401) {
+          // Token expired or invalid, log the user out
+          logout();
+        }
+        return Promise.reject(error);
+      }
+    );
+
+    return () => {
+      // Clean up interceptor on unmount
+      axios.interceptors.response.eject(interceptor);
+    };
+  }, []);
 
   const login = async (username, password) => {
     try {
       const response = await axios.post(`${API}/auth/login`, { username, password });
       const { token, user } = response.data;
       
-      localStorage.setItem('token', token);
+      localStorage.setItem('token', token); // Store token in localStorage for persistence
       setToken(token);
       setUser(user);
       axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
@@ -44,17 +87,66 @@ const AuthProvider = ({ children }) => {
   };
 
   const logout = () => {
-    localStorage.removeItem('token');
+    localStorage.removeItem('token'); // Remove from localStorage
     setToken(null);
     setUser(null);
     delete axios.defaults.headers.common['Authorization'];
   };
 
   return (
-    <AuthContext.Provider value={{ user, token, login, logout }}>
+    <AuthContext.Provider value={{ user, token, login, logout, loading }}>
       {children}
     </AuthContext.Provider>
   );
+};
+
+// Protected Route Component
+const ProtectedRoute = ({ element, requiredRoles = [] }) => {
+  const { user, loading } = React.useContext(AuthContext);
+  
+  // Show loading state while checking authentication
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-gray-900 to-slate-800 flex items-center justify-center">
+        <div className="text-center">
+          <Loader2 className="h-8 w-8 animate-spin text-white mx-auto mb-4" />
+          <p className="text-white">Yükleniyor...</p>
+        </div>
+      </div>
+    );
+  }
+  
+  // If not authenticated, redirect to login
+  if (!user) {
+    return <Navigate to="/" replace />;
+  }
+  
+  // If roles are specified and user doesn't have required role, show unauthorized
+  if (requiredRoles.length > 0 && !requiredRoles.includes(user.role)) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-gray-900 to-slate-800 flex items-center justify-center p-4">
+        <Card className="w-full max-w-md bg-white/10 backdrop-blur-lg border-white/20">
+          <CardHeader className="text-center">
+            <CardTitle className="text-2xl text-white">Yetkisiz Erişim</CardTitle>
+            <CardDescription className="text-gray-300">
+              Bu sayfaya erişim yetkiniz bulunmamaktadır.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex justify-center">
+            <Button 
+              onClick={() => window.location.href = '/dashboard'} 
+              className="bg-blue-600 hover:bg-blue-700"
+            >
+              Ana Sayfaya Dön
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+  
+  // If authenticated and authorized, render the element
+  return element;
 };
 
 // Login Component
@@ -63,7 +155,15 @@ const Login = () => {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const { login } = React.useContext(AuthContext);
+  const { login, user } = React.useContext(AuthContext);
+  const navigate = useNavigate();
+
+  // If already logged in, redirect to dashboard
+  useEffect(() => {
+    if (user) {
+      navigate('/dashboard');
+    }
+  }, [user, navigate]);
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -74,6 +174,9 @@ const Login = () => {
     
     if (!result.success) {
       setError(result.error);
+    } else {
+      // Redirect based on role
+      navigate('/dashboard');
     }
     
     setLoading(false);
@@ -152,6 +255,8 @@ const OperatorScanner = () => {
   const [selectedProcess, setSelectedProcess] = useState(null);
   const [actionType, setActionType] = useState('start');
   const [showProcessSelection, setShowProcessSelection] = useState(false);
+  // New state for confirmation message
+  const [showConfirmationMessage, setShowConfirmationMessage] = useState(false);
   
   const videoRef = React.useRef(null);
   const qrScannerRef = React.useRef(null);
@@ -299,6 +404,9 @@ const OperatorScanner = () => {
 
       setResult(response.data);
       
+      // Show confirmation message
+      setShowConfirmationMessage(true);
+      
       // Reset state after successful action
       setTimeout(() => {
         setResult(null);
@@ -306,6 +414,7 @@ const OperatorScanner = () => {
         setSelectedProcess(null);
         setShowProcessSelection(false);
         setQrCode('');
+        setShowConfirmationMessage(false);
         if (!manualMode && !isDialogShowing.current) {
           startCamera();
         }
@@ -731,6 +840,23 @@ const OperatorScanner = () => {
               </div>
             </div>
           )}
+
+          {/* New Confirmation Message after işlemi onayla button click */}
+          {showConfirmationMessage && (
+            <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+              <div className="bg-white/10 backdrop-blur-lg border border-white/20 rounded-2xl p-6 w-full max-w-sm animate-in fade-in zoom-in duration-300">
+                <div className="text-center mb-6">
+                  <div className="mx-auto mb-4 p-4 bg-green-600/20 rounded-full w-fit">
+                    <CheckCircle className="h-12 w-12 text-green-400" />
+                  </div>
+                  <h3 className="text-xl font-bold text-white mb-2">İşlem Onaylanmıştır</h3>
+                  <p className="text-gray-300 text-sm">
+                    İşleminiz başarıyla sisteme kaydedilmiştir.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -834,7 +960,7 @@ const QRScanner = () => {
               <div>
                 <Input
                   type="text"
-                  placeholder="QR Code (or scan with camera)"
+                  placeholder="QR Kodu Manuel Olarak Girin"
                   value={qrCode}
                   onChange={(e) => setQrCode(e.target.value)}
                   className="bg-white/10 border-white/20 text-white placeholder:text-gray-400"
@@ -1032,26 +1158,6 @@ const Dashboard = () => {
       console.error('Failed to fetch dashboard data:', error);
     } finally {
       setLoading(false);
-    }
-  };
-
-  const getStatusColor = (status) => {
-    switch (status) {
-      case 'pending': return 'bg-gray-500';
-      case 'in_progress': return 'bg-blue-500';
-      case 'completed': return 'bg-green-500';
-      case 'blocked': return 'bg-red-500';
-      default: return 'bg-gray-500';
-    }
-  };
-
-  const getStatusIcon = (status) => {
-    switch (status) {
-      case 'pending': return <Clock className="h-4 w-4" />;
-      case 'in_progress': return <Play className="h-4 w-4" />;
-      case 'completed': return <CheckCircle className="h-4 w-4" />;
-      case 'blocked': return <Pause className="h-4 w-4" />;
-      default: return <Clock className="h-4 w-4" />;
     }
   };
 
@@ -2256,17 +2362,46 @@ const getStatusColor = (status) => {
   }
 };
 
-// Root App Component
+// Helper function for status icons
+const getStatusIcon = (status) => {
+  switch (status) {
+    case 'pending': return <Clock className="h-4 w-4" />;
+    case 'in_progress': return <Play className="h-4 w-4" />;
+    case 'completed': return <CheckCircle className="h-4 w-4" />;
+    case 'blocked': return <Pause className="h-4 w-4" />;
+    default: return <Clock className="h-4 w-4" />;
+  }
+};
+
+// Root App Component with Routes
 function App() {
   return (
     <AuthProvider>
       <div className="App">
         <BrowserRouter>
-          <AuthContext.Consumer>
-            {({ token }) => (
-              token ? <MainApp /> : <Login />
-            )}
-          </AuthContext.Consumer>
+          <Routes>
+            <Route path="/" element={
+              <AuthContext.Consumer>
+                {({ user, loading }) => (
+                  loading ? (
+                    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-gray-900 to-slate-800 flex items-center justify-center">
+                      <div className="text-center">
+                        <Loader2 className="h-8 w-8 animate-spin text-white mx-auto mb-4" />
+                        <p className="text-white">Yükleniyor...</p>
+                      </div>
+                    </div>
+                  ) : user ? <Navigate to="/dashboard" replace /> : <Login />
+                )}
+              </AuthContext.Consumer>
+            } />
+            <Route path="/dashboard" element={
+              <ProtectedRoute element={<MainApp />} />
+            } />
+            <Route path="/operator" element={
+              <ProtectedRoute element={<OperatorScanner />} requiredRoles={['operator']} />
+            } />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
         </BrowserRouter>
       </div>
     </AuthProvider>
@@ -2274,3 +2409,4 @@ function App() {
 }
 
 export default App;
+
