@@ -1359,6 +1359,7 @@ const Projects = () => {
   const [selectedProject, setSelectedProject] = useState('');
   const [newPartNumber, setNewPartNumber] = useState('');
   const [newProjectName, setNewProjectName] = useState('');
+  const [newPartQuantity, setNewPartQuantity] = useState(1);
   const [deleteItemType, setDeleteItemType] = useState('project'); // 'project' or 'part'
   const [deleteSelectedId, setDeleteSelectedId] = useState('');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
