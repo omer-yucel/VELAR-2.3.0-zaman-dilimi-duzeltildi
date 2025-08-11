@@ -221,127 +221,12 @@ const Login = () => {
                 required
               />
             </div>
-            {error && (
-              <div className="text-red-400 text-sm text-center">{error}</div>
-            )}
-            <Button 
-              type="submit" 
-              className="w-full bg-blue-600 hover:bg-blue-700"
-              disabled={loading}
-            >
-              {loading ? 'Giriş yapılıyor...' : 'Giriş Yap'}
+            <Button type="submit" className="w-full bg-blue-600 hover:bg-blue-700" disabled={loading}>
+              {loading ? 'Yükleniyor...' : 'Giriş Yap'}
             </Button>
           </form>
         </CardContent>
       </Card>
-    </div>
-  );
-};
-
-// Change Password Page
-const ChangePassword = () => {
-  const [currentPassword, setCurrentPassword] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [successOpen, setSuccessOpen] = useState(false);
-  const navigate = useNavigate();
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setError('');
-    if (newPassword !== confirmPassword) {
-      setError('Yeni şifre ve doğrulama eşleşmiyor');
-      return;
-    }
-    try {
-      setLoading(true);
-      await axios.post(`${API}/users/change-password`, {
-        current_password: currentPassword,
-        new_password: newPassword,
-      });
-      setSuccessOpen(true);
-      setCurrentPassword('');
-      setNewPassword('');
-      setConfirmPassword('');
-    } catch (err) {
-      setError(err.response?.data?.detail || 'Şifre değiştirilemedi');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-gray-900 to-slate-800 flex items-center justify-center p-4">
-      <Card className="w-full max-w-md bg-white/10 backdrop-blur-lg border-white/20">
-        <CardHeader className="text-center">
-          <CardTitle className="text-2xl text-white">Şifre Değiştir</CardTitle>
-          <CardDescription className="text-gray-300">Hesap şifrenizi güncelleyin</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <Input
-                type="password"
-                placeholder="Mevcut Şifre"
-                value={currentPassword}
-                onChange={(e) => setCurrentPassword(e.target.value)}
-                className="bg-white/10 border-white/20 text-white placeholder:text-gray-400"
-                required
-              />
-            </div>
-            <div>
-              <Input
-                type="password"
-                placeholder="Yeni Şifre"
-                value={newPassword}
-                onChange={(e) => setNewPassword(e.target.value)}
-                className="bg-white/10 border-white/20 text-white placeholder:text-gray-400"
-                required
-              />
-            </div>
-            <div>
-              <Input
-                type="password"
-                placeholder="Yeni Şifre (Tekrar)"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                className="bg-white/10 border-white/20 text-white placeholder:text-gray-400"
-                required
-              />
-            </div>
-            {error && <div className="text-red-400 text-sm text-center">{error}</div>}
-            <div className="flex gap-2">
-              <Button 
-                type="button"
-                variant="outline"
-                className="w-1/3 border-white/20 text-white hover:bg-white/10"
-                onClick={() => navigate(-1)}
-              >Geri</Button>
-              <Button 
-                type="submit" 
-                className="w-2/3 bg-blue-600 hover:bg-blue-700"
-                disabled={loading}
-              >{loading ? 'Kaydediliyor...' : 'Şifreyi Değiştir'}</Button>
-            </div>
-          </form>
-        </CardContent>
-      </Card>
-
-      <Dialog open={successOpen} onOpenChange={setSuccessOpen}>
-        <DialogContent className="bg-white/10 border-white/20 text-white">
-          <DialogHeader>
-            <DialogTitle>Başarılı</DialogTitle>
-            <DialogDescription className="text-gray-300">
-              Şifreniz başarıyla değiştirildi.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="flex justify-end">
-            <Button onClick={() => { setSuccessOpen(false); navigate('/dashboard'); }} className="bg-blue-600 hover:bg-blue-700">Tamam</Button>
-          </div>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 };
@@ -352,6 +237,7 @@ const OperatorScanner = () => {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
+
   const [cameraActive, setCameraActive] = useState(false);
   const [cameraError, setCameraError] = useState('');
   const [manualMode, setManualMode] = useState(false);
@@ -364,9 +250,10 @@ const OperatorScanner = () => {
   const [selectedProcess, setSelectedProcess] = useState(null);
   const [actionType, setActionType] = useState('start');
   const [showProcessSelection, setShowProcessSelection] = useState(false);
-  // New state for confirmation message
   const [showConfirmationMessage, setShowConfirmationMessage] = useState(false);
-  
+  // NEW: quantity entry
+  const [quantity, setQuantity] = useState(1);
+
   const videoRef = React.useRef(null);
   const qrScannerRef = React.useRef(null);
   const isDialogShowing = React.useRef(false);
@@ -433,20 +320,7 @@ const OperatorScanner = () => {
       setCameraActive(true);
     } catch (err) {
       console.error('Camera start failed:', err);
-      let errorMessage = 'Camera access denied. ';
-      
-      if (err.name === 'NotAllowedError') {
-        errorMessage += 'Please allow camera permissions and refresh the page.';
-      } else if (err.name === 'NotFoundError') {
-        errorMessage += 'No camera found on this device.';
-      } else if (err.name === 'NotSupportedError') {
-        errorMessage += 'Camera not supported in this browser.';
-      } else {
-        errorMessage += 'Please try manual mode instead.';
-      }
-      
-      setCameraError(errorMessage);
-      setManualMode(true);
+      setCameraError('Unable to access camera. Please allow camera permissions or use manual input.');
     }
   };
 
@@ -466,6 +340,7 @@ const OperatorScanner = () => {
     setError('');
     setResult(null);
     setWorkOrderData(null);
+    setSelectedProcess(null);
     setShowProcessSelection(false);
 
     try {
@@ -478,6 +353,8 @@ const OperatorScanner = () => {
       // Set work order data and show process selection
       setWorkOrderData(response.data);
       setShowProcessSelection(true);
+      // Reset qty to 1 for new scan
+      setQuantity(1);
       
     } catch (error) {
       setError(error.response?.data?.detail || 'Scan failed');
@@ -494,10 +371,27 @@ const OperatorScanner = () => {
     setLoading(false);
   };
 
-  // Handle process action (start or end)
+  // Handle process action (start or end) with quantity
   const handleProcessAction = async () => {
     if (!selectedProcess || !workOrderData || loading) return;
-    
+
+    // Validate quantity against available counts
+    const maxStart = selectedProcess?.remaining_count ?? 0;
+    const maxEnd = selectedProcess?.in_progress_count ?? 0;
+    const qty = Number(quantity) || 1;
+    if (qty < 1) {
+      setError('Miktar en az 1 olmalıdır');
+      return;
+    }
+    if (actionType === 'start' && qty > maxStart) {
+      setError(`Başlatılabilecek maksimum miktar: ${maxStart}`);
+      return;
+    }
+    if (actionType === 'end' && qty > maxEnd) {
+      setError(`Bitirilebilecek maksimum miktar: ${maxEnd}`);
+      return;
+    }
+
     setLoading(true);
     setError('');
     setResult(null);
@@ -508,15 +402,14 @@ const OperatorScanner = () => {
         username: user.username,
         password: 'session_authenticated',
         process_index: selectedProcess.step_index,
-        action: actionType
+        action: actionType,
+        quantity: qty,
       });
 
       setResult(response.data);
-      
-      // Show confirmation message
       setShowConfirmationMessage(true);
-      
-      // Reset state after successful action
+
+      // Auto close success & reset
       setTimeout(() => {
         setResult(null);
         setWorkOrderData(null);
@@ -571,6 +464,8 @@ const OperatorScanner = () => {
   // Handle process selection
   const handleProcessSelect = (process) => {
     setSelectedProcess(process);
+    // Reset quantity when changing step, default to 1
+    setQuantity(1);
   };
 
   return (
@@ -627,6 +522,9 @@ const OperatorScanner = () => {
                 <CardDescription className="text-gray-300">
                   Mevcut Adım: {workOrderData.work_order.current_step_name} ({workOrderData.work_order.current_step_index + 1}/{workOrderData.work_order.total_steps})
                 </CardDescription>
+                <div className="mt-2 text-sm text-blue-200">
+                  Toplam Miktar: {workOrderData.work_order.total_quantity}
+                </div>
               </CardHeader>
               
               <CardContent className="space-y-6">
@@ -668,6 +566,9 @@ const OperatorScanner = () => {
                               : process.can_start 
                                 ? 'Bu adımı başlatabilirsiniz' 
                                 : 'Bu adımı bitirebilirsiniz'}
+                            <div className="mt-1 text-[11px] text-blue-200">
+                              Kalan: {process.remaining_count} · Devam: {process.in_progress_count} · Tamam: {process.completed_count}
+                            </div>
                           </div>
                         )}
                       </div>
@@ -677,34 +578,56 @@ const OperatorScanner = () => {
                 
                 {/* Action Type Selection */}
                 {selectedProcess && (
-                  <div>
-                    <label className="block text-sm font-medium text-white mb-2">
-                      İşlem Türü
-                    </label>
-                    <div className="grid grid-cols-2 gap-3">
-                      {selectedProcess.can_start && (
-                        <Button
-                          type="button"
-                          onClick={() => setActionType('start')}
-                          className={`h-12 ${actionType === 'start' 
-                            ? 'bg-green-600 hover:bg-green-700' 
-                            : 'bg-white/10 hover:bg-white/20'}`}
-                        >
-                          <Play className="h-5 w-5 mr-2" />
-                          Başlat
-                        </Button>
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-sm font-medium text-white mb-2">
+                        İşlem Türü
+                      </label>
+                      <div className="grid grid-cols-2 gap-3">
+                        {selectedProcess.can_start && (
+                          <Button
+                            type="button"
+                            onClick={() => setActionType('start')}
+                            className={`h-12 ${actionType === 'start' 
+                              ? 'bg-green-600 hover:bg-green-700' 
+                              : 'bg-white/10 hover:bg-white/20'}`}
+                          >
+                            <Play className="h-5 w-5 mr-2" />
+                            Başlat
+                          </Button>
+                        )}
+                        {selectedProcess.can_end && (
+                          <Button
+                            type="button"
+                            onClick={() => setActionType('end')}
+                            className={`h-12 ${actionType === 'end' 
+                              ? 'bg-red-600 hover:bg-red-700' 
+                              : 'bg-white/10 hover:bg-white/20'}`}
+                          >
+                            <Pause className="h-5 w-5 mr-2" />
+                            Bitir
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Quantity Input */}
+                    <div>
+                      <label className="block text-sm font-medium text-white mb-2">
+                        Miktar
+                      </label>
+                      <Input
+                        type="number"
+                        min={1}
+                        value={quantity}
+                        onChange={(e) => setQuantity(e.target.value)}
+                        className="bg-white/10 border-white/20 text-white placeholder:text-gray-400"
+                      />
+                      {actionType === 'start' && (
+                        <p className="text-[11px] text-blue-200 mt-1">Başlatılabilir maksimum: {selectedProcess?.remaining_count ?? 0}</p>
                       )}
-                      {selectedProcess.can_end && (
-                        <Button
-                          type="button"
-                          onClick={() => setActionType('end')}
-                          className={`h-12 ${actionType === 'end' 
-                            ? 'bg-red-600 hover:bg-red-700' 
-                            : 'bg-white/10 hover:bg-white/20'}`}
-                        >
-                          <Pause className="h-5 w-5 mr-2" />
-                          Bitir
-                        </Button>
+                      {actionType === 'end' && (
+                        <p className="text-[11px] text-blue-200 mt-1">Bitirilebilir maksimum: {selectedProcess?.in_progress_count ?? 0}</p>
                       )}
                     </div>
                   </div>
@@ -909,73 +832,6 @@ const OperatorScanner = () => {
               </CardContent>
             </Card>
           )}
-
-          {/* Confirmation Dialog */}
-          {showConfirmDialog && (
-            <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-              <div className="bg-white/10 backdrop-blur-lg border border-white/20 rounded-2xl p-6 w-full max-w-sm animate-in fade-in zoom-in duration-300">
-                <div className="text-center mb-6">
-                  <img 
-                    src="https://customer-assets.emergentagent.com/job_metalops/artifacts/i1dybgg7_Velar%20Makine%20Logo%20SVG.png" 
-                    alt="Velar Makine Logo" 
-                    className="h-10 w-10 object-contain mx-auto"
-                  />
-                  <h3 className="text-xl font-bold text-white mb-2">QR Kod Tespit Edildi!</h3>
-                  <p className="text-gray-300 text-sm mb-4">Bu kod için işlem yapılsın mı?</p>
-                  <div className="bg-white/5 rounded-lg p-3 mb-4">
-                    <p className="text-xs text-gray-400 mb-1">Tespit edilen kod:</p>
-                    <p className="text-white font-mono text-sm break-all">{pendingQrCode}</p>
-                  </div>
-                </div>
-                
-                <div className="flex gap-3">
-                  <Button
-                    onClick={handleCancelScan}
-                    variant="outline"
-                    className="flex-1 border-white/20 text-white hover:bg-white/10 h-12"
-                    disabled={loading}
-                  >
-                    <X className="h-4 w-4 mr-2" />
-                    Hayır
-                  </Button>
-                  <Button
-                    onClick={handleConfirmScan}
-                    className="flex-1 bg-gradient-to-r from-green-600 to-green-700 hover:from-green-700 hover:to-green-800 h-12"
-                    disabled={loading}
-                  >
-                    {loading ? (
-                      <>
-                        <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent mr-2" />
-                        İşleniyor...
-                      </>
-                    ) : (
-                      <>
-                        <CheckCircle className="h-4 w-4 mr-2" />
-                        Evet
-                      </>
-                    )}
-                  </Button>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* New Confirmation Message after işlemi onayla button click */}
-          {showConfirmationMessage && (
-            <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-              <div className="bg-white/10 backdrop-blur-lg border border-white/20 rounded-2xl p-6 w-full max-w-sm animate-in fade-in zoom-in duration-300">
-                <div className="text-center mb-6">
-                  <div className="mx-auto mb-4 p-4 bg-green-600/20 rounded-full w-fit">
-                    <CheckCircle className="h-12 w-12 text-green-400" />
-                  </div>
-                  <h3 className="text-xl font-bold text-white mb-2">İşlem Onaylanmıştır</h3>
-                  <p className="text-gray-300 text-sm">
-                    İşleminiz başarıyla sisteme kaydedilmiştir.
-                  </p>
-                </div>
-              </div>
-            </div>
-          )}
         </div>
       </div>
     </div>
@@ -996,6 +852,8 @@ const QRScanner = () => {
   const [selectedProcess, setSelectedProcess] = useState(null);
   const [actionType, setActionType] = useState('start');
   const [showProcessSelection, setShowProcessSelection] = useState(false);
+  // NEW: quantity
+  const [quantity, setQuantity] = useState(1);
 
   // Handle scanning a work order QR code
   const handleWorkOrderScan = async (e) => {
@@ -1016,6 +874,8 @@ const QRScanner = () => {
       // Set work order data and show process selection
       setWorkOrderData(response.data);
       setShowProcessSelection(true);
+      // Reset quantity for new scan
+      setQuantity(1);
       
       // Clear form fields
       setQrCode('');
@@ -1032,6 +892,21 @@ const QRScanner = () => {
     e.preventDefault();
     if (!selectedProcess || !workOrderData || loading) return;
     
+    // Validate quantity
+    const qty = Number(quantity) || 1;
+    if (qty < 1) {
+      setError('Miktar en az 1 olmalıdır');
+      return;
+    }
+    if (actionType === 'start' && qty > (selectedProcess?.remaining_count ?? 0)) {
+      setError(`Başlatılabilecek maksimum miktar: ${selectedProcess?.remaining_count ?? 0}`);
+      return;
+    }
+    if (actionType === 'end' && qty > (selectedProcess?.in_progress_count ?? 0)) {
+      setError(`Bitirilebilecek maksimum miktar: ${selectedProcess?.in_progress_count ?? 0}`);
+      return;
+    }
+
     setLoading(true);
     setError('');
     setResult(null);
@@ -1042,7 +917,8 @@ const QRScanner = () => {
         username,
         password,
         process_index: selectedProcess.step_index,
-        action: actionType
+        action: actionType,
+        quantity: qty,
       });
 
       setResult(response.data);
@@ -1053,6 +929,7 @@ const QRScanner = () => {
       setShowProcessSelection(false);
       setUsername('');
       setPassword('');
+      setQuantity(1);
       
     } catch (error) {
       setError(error.response?.data?.detail || 'Process action failed');
@@ -1136,6 +1013,9 @@ const QRScanner = () => {
             <CardDescription className="text-gray-300">
               Mevcut Adım: {workOrderData.work_order.current_step_name} ({workOrderData.work_order.current_step_index + 1}/{workOrderData.work_order.total_steps})
             </CardDescription>
+            <div className="mt-2 text-sm text-blue-200">
+              Toplam Miktar: {workOrderData.work_order.total_quantity}
+            </div>
           </CardHeader>
           <CardContent>
             <form onSubmit={handleProcessAction} className="space-y-4">
@@ -1154,6 +1034,7 @@ const QRScanner = () => {
                       if (process.can_start) setActionType('start');
                       else if (process.can_end) setActionType('end');
                     }
+                    setQuantity(1);
                   }}
                 >
                   <SelectTrigger className="bg-white/10 border-white/20 text-white">
@@ -1166,14 +1047,7 @@ const QRScanner = () => {
                         value={process.step_index.toString()}
                         disabled={!process.can_start && !process.can_end}
                       >
-                        {process.step_name} ({process.status})
-                        {process.can_start && process.can_end 
-                          ? ' - Başlatılabilir/Bitirilebilir' 
-                          : process.can_start 
-                            ? ' - Başlatılabilir' 
-                            : process.can_end 
-                              ? ' - Bitirilebilir' 
-                              : ' - İşlem yapılamaz'}
+                        {process.step_name} ({process.status}) — Kalan: {process.remaining_count}, Devam: {process.in_progress_count}, Tamam: {process.completed_count}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -1203,6 +1077,28 @@ const QRScanner = () => {
                       )}
                     </SelectContent>
                   </Select>
+                </div>
+              )}
+
+              {/* Quantity Input */}
+              {selectedProcess && (
+                <div>
+                  <label className="block text-sm font-medium text-white mb-2">
+                    Miktar
+                  </label>
+                  <Input
+                    type="number"
+                    min={1}
+                    value={quantity}
+                    onChange={(e) => setQuantity(e.target.value)}
+                    className="bg-white/10 border-white/20 text-white placeholder:text-gray-400"
+                  />
+                  {actionType === 'start' && (
+                    <p className="text-[11px] text-blue-200 mt-1">Başlatılabilir maksimum: {selectedProcess?.remaining_count ?? 0}</p>
+                  )}
+                  {actionType === 'end' && (
+                    <p className="text-[11px] text-blue-200 mt-1">Bitirilebilir maksimum: {selectedProcess?.in_progress_count ?? 0}</p>
+                  )}
                 </div>
               )}
               
@@ -1315,6 +1211,9 @@ const Dashboard = () => {
               <CardDescription className="text-gray-300">
                 Project: {item.project.name}
               </CardDescription>
+              <div className="mt-1 text-sm text-blue-200">
+                Toplam: {item.total_quantity} · Tamam: {item.summary_counts.completed} · Devam: {item.summary_counts.in_progress} · Kalan: {item.summary_counts.remaining}
+              </div>
             </CardHeader>
             <CardContent>
               <div className="flex items-center justify-between">
@@ -1324,7 +1223,7 @@ const Dashboard = () => {
               <div className="mt-4">
                 <div className="flex justify-between text-sm text-gray-400 mb-2">
                   <span>Progress</span>
-                  <span>{item.part.current_step_index + 1} / {item.total_steps}</span>
+                  <span>{item.summary_counts.completed} / {item.total_quantity}</span>
                 </div>
                 <div className="w-full bg-gray-700 rounded-full h-2">
                   <div 
@@ -1335,6 +1234,18 @@ const Dashboard = () => {
                   ></div>
                 </div>
               </div>
+
+              {/* Per-step breakdown */}
+              {item.per_step_counts?.length > 0 && (
+                <div className="mt-4 space-y-1">
+                  {item.per_step_counts.map((s) => (
+                    <div key={s.step_index} className="flex items-center justify-between text-xs text-gray-300">
+                      <span>{s.step_index + 1}. {s.step_name}</span>
+                      <span>K:{s.remaining_count} · D:{s.in_progress_count} · T:{s.completed_count}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </CardContent>
           </Card>
         ))}
@@ -1365,6 +1276,8 @@ const Projects = () => {
   const [deleteItemName, setDeleteItemName] = useState('');
   const [selectedSteps, setSelectedSteps] = useState([]);
   const [showStepSelector, setShowStepSelector] = useState(false);
+  // NEW: quantity for work order creation
+  const [quantity, setQuantity] = useState(1);
 
   // Available manufacturing steps
   const availableSteps = [
@@ -1465,18 +1378,27 @@ const Projects = () => {
       return;
     }
 
+    // Validate quantity
+    const qty = Number(quantity) || 1;
+    if (qty < 1) {
+      alert('Miktar en az 1 olmalıdır');
+      return;
+    }
+
     try {
       // Create the work order within the selected project using custom steps
       await axios.post(`${API}/parts`, {
         part_number: newPartNumber,
         project_id: selectedProject,
-        process_steps: selectedSteps
+        process_steps: selectedSteps,
+        total_quantity: qty,
       });
       
       setNewPartNumber('');
       setSelectedProject('');
       setSelectedSteps([]);
       setShowStepSelector(false);
+      setQuantity(1);
       fetchProjectsWithParts();
     } catch (error) {
       console.error('Failed to create part:', error);
@@ -1653,6 +1575,19 @@ const Projects = () => {
                 required
               />
             </div>
+
+            {/* Quantity input */}
+            <div>
+              <label className="block text-sm font-medium text-white mb-2">Miktar</label>
+              <Input
+                type="number"
+                min={1}
+                value={quantity}
+                onChange={(e) => setQuantity(e.target.value)}
+                className="bg-white/10 border-white/20 text-white placeholder:text-gray-400"
+              />
+              <p className="text-[11px] text-blue-200 mt-1">Boş bırakılırsa 1 varsayılır</p>
+            </div>
             
             {/* Step Selection Section */}
             <div className="space-y-3">
@@ -1780,145 +1715,62 @@ const Projects = () => {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="project">Proje Sil</SelectItem>
-                  <SelectItem value="part">İş Emri Sil</SelectItem>
+                  <SelectItem value="project">Proje</SelectItem>
+                  <SelectItem value="part">İş Emri</SelectItem>
                 </SelectContent>
               </Select>
             </div>
-            
+
             <div>
               <Select value={deleteSelectedId} onValueChange={setDeleteSelectedId}>
                 <SelectTrigger className="bg-white/10 border-white/20 text-white">
                   <SelectValue placeholder={deleteItemType === 'project' ? 'Proje Seçin' : 'İş Emri Seçin'} />
                 </SelectTrigger>
                 <SelectContent>
-                  {deleteItemType === 'project' 
-                    ? projects.map(project => (
-                        <SelectItem key={project.id} value={project.id}>
-                          {project.name}
+                  {deleteItemType === 'project' ? (
+                    projects.map(project => (
+                      <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>
+                    ))
+                  ) : (
+                    projectsWithParts.flatMap(project => 
+                      project.parts?.map(part => (
+                        <SelectItem key={part.id} value={part.id}>
+                          {part.part_number} ({project.name})
                         </SelectItem>
-                      ))
-                    : projectsWithParts.flatMap(project => 
-                        project.parts?.map(part => (
-                          <SelectItem key={part.id} value={part.id}>
-                            {part.part_number} ({project.name})
-                          </SelectItem>
-                        )) || []
-                      )
-                  }
+                      )) || []
+                    )
+                  )}
                 </SelectContent>
               </Select>
             </div>
-            
-            <Button 
-              onClick={handleDeleteClick}
-              disabled={!deleteSelectedId}
-              className="bg-red-600 hover:bg-red-700"
-            >
-              Sil
-            </Button>
+
+            <div className="flex items-center gap-3">
+              <Button onClick={handleDeleteClick} className="bg-red-600 hover:bg-red-700" disabled={!deleteSelectedId}>
+                Silmeyi Onayla
+              </Button>
+              {deleteItemName && (
+                <span className="text-sm text-gray-300">Seçili: {deleteItemName}</span>
+              )}
+            </div>
+
+            {/* Delete Confirmation Dialog */}
+            <Dialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
+              <DialogContent className="bg-white/10 border-white/20">
+                <DialogHeader>
+                  <DialogTitle className="text-white">Silme İşlemini Onayla</DialogTitle>
+                  <DialogDescription className="text-gray-300">
+                    {deleteItemType === 'project' ? 'Projeyi' : 'İş emrini'} silmek istediğinize emin misiniz? Bu işlem geri alınamaz.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="flex justify-end gap-2">
+                  <Button variant="outline" className="border-white/20 text-white hover:bg-white/10" onClick={cancelDelete}>İptal</Button>
+                  <Button className="bg-red-600 hover:bg-red-700" onClick={confirmDelete}>Sil</Button>
+                </div>
+              </DialogContent>
+            </Dialog>
           </div>
         </CardContent>
       </Card>
-      
-      
-      {/* Projects with their Work Orders - Hierarchical Display */}
-      <div className="space-y-6">
-        <h3 className="text-xl font-bold text-white">Projeler ve İş Emirleri</h3>
-        
-        {projectsWithParts.map(project => (
-          <Card key={project.id} className="bg-white/5 backdrop-blur-lg border-white/10">
-            <CardHeader>
-              <div className="flex items-center justify-between">
-                <div>
-                  <CardTitle className="text-white text-lg">{project.name}</CardTitle>
-                  <CardDescription className="text-gray-300">
-                    {project.description}
-                  </CardDescription>
-                  <div className="mt-2">
-                    <Badge className="bg-blue-600/20 text-blue-300 border-blue-600/30">
-                      {project.parts?.length || 0} İş Emri
-                    </Badge>
-                  </div>
-                </div>
-              </div>
-            </CardHeader>
-            
-            {/* Work Orders within this Project */}
-            {project.parts && project.parts.length > 0 && (
-              <CardContent>
-                <div className="space-y-3">
-                  <h4 className="text-sm font-medium text-white mb-3">İş Emirleri:</h4>
-                  <div className="grid gap-3">
-                    {project.parts.map(part => (
-                      <div key={part.id} className="bg-white/5 rounded-lg p-3 border border-white/10">
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <span className="text-white font-medium">{part.part_number}</span>
-                            <div className="text-sm text-gray-300 mt-1">
-                              Adım: {part.current_step_index + 1} / {part.total_steps}
-                            </div>
-                          </div>
-                          <Badge className={`${getStatusColor(part.status)} text-white`}>
-                            {part.status.replace('_', ' ').toUpperCase()}
-                          </Badge>
-                        </div>
-                        <div className="mt-2 text-xs text-gray-400">
-                          Oluşturuldu: {new Date(part.created_at).toLocaleDateString('tr-TR', { timeZone: 'Europe/Istanbul' })}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </CardContent>
-            )}
-            
-            {/* Empty state for projects with no work orders */}
-            {(!project.parts || project.parts.length === 0) && (
-              <CardContent>
-                <div className="text-center py-4 text-gray-400">
-                  Bu projede henüz iş emri bulunmuyor
-                </div>
-              </CardContent>
-            )}
-          </Card>
-        ))}
-        
-        {/* Empty state for no projects */}
-        {projectsWithParts.length === 0 && !loading && (
-          <Card className="bg-white/5 backdrop-blur-lg border-white/10">
-            <CardContent className="py-8 text-center">
-              <p className="text-gray-400">Henüz proje bulunmuyor</p>
-            </CardContent>
-          </Card>
-        )}
-      </div>
-
-      {/* Confirmation Modal */}
-      {showDeleteConfirm && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-gray-800 p-6 rounded-lg shadow-xl max-w-md w-full mx-4">
-            <h3 className="text-lg font-semibold text-white mb-4">
-              Bu dosyayı '{deleteItemName}' silmek istediğinize emin misiniz?
-            </h3>
-            <div className="flex gap-3 justify-end">
-              <Button 
-                onClick={cancelDelete}
-                variant="outline"
-                className="border-gray-500 text-gray-300 hover:bg-gray-700"
-              >
-                İptal Et
-              </Button>
-              <Button 
-                onClick={confirmDelete}
-                className="bg-red-600 hover:bg-red-700"
-              >
-                Sil
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };
@@ -2543,6 +2395,114 @@ const UserManagement = () => {
           </DialogHeader>
           <div className="flex justify-end">
             <Button onClick={() => setSuccessOpen(false)} className="bg-blue-600 hover:bg-blue-700">Tamam</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+};
+
+// Change Password Page
+const ChangePassword = () => {
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [successOpen, setSuccessOpen] = useState(false);
+  const navigate = useNavigate();
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError('');
+    if (newPassword !== confirmPassword) {
+      setError('Yeni şifre ve doğrulama eşleşmiyor');
+      return;
+    }
+    try {
+      setLoading(true);
+      await axios.post(`${API}/users/change-password`, {
+        current_password: currentPassword,
+        new_password: newPassword,
+      });
+      setSuccessOpen(true);
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Şifre değiştirilemedi');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-gray-900 to-slate-800 flex items-center justify-center p-4">
+      <Card className="w-full max-w-md bg-white/10 backdrop-blur-lg border-white/20">
+        <CardHeader className="text-center">
+          <CardTitle className="text-2xl text-white">Şifre Değiştir</CardTitle>
+          <CardDescription className="text-gray-300">Hesap şifrenizi güncelleyin</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div>
+              <Input
+                type="password"
+                placeholder="Mevcut Şifre"
+                value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)}
+                className="bg-white/10 border-white/20 text-white placeholder:text-gray-400"
+                required
+              />
+            </div>
+            <div>
+              <Input
+                type="password"
+                placeholder="Yeni Şifre"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                className="bg-white/10 border-white/20 text-white placeholder:text-gray-400"
+                required
+              />
+            </div>
+            <div>
+              <Input
+                type="password"
+                placeholder="Yeni Şifre (Tekrar)"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                className="bg-white/10 border-white/20 text-white placeholder:text-gray-400"
+                required
+              />
+            </div>
+            {error && <div className="text-red-400 text-sm text-center">{error}</div>}
+            <div className="flex gap-2">
+              <Button 
+                type="button"
+                variant="outline"
+                className="w-1/3 border-white/20 text-white hover:bg-white/10"
+                onClick={() => navigate(-1)}
+              >Geri</Button>
+              <Button 
+                type="submit" 
+                className="w-2/3 bg-blue-600 hover:bg-blue-700"
+                disabled={loading}
+              >{loading ? 'Kaydediliyor...' : 'Şifreyi Değiştir'}</Button>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
+
+      <Dialog open={successOpen} onOpenChange={setSuccessOpen}>
+        <DialogContent className="bg-white/10 border-white/20 text-white">
+          <DialogHeader>
+            <DialogTitle>Başarılı</DialogTitle>
+            <DialogDescription className="text-gray-300">
+              Şifreniz başarıyla değiştirildi.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end">
+            <Button onClick={() => { setSuccessOpen(false); navigate('/dashboard'); }} className="bg-blue-600 hover:bg-blue-700">Tamam</Button>
           </div>
         </DialogContent>
       </Dialog>

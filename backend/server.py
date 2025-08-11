@@ -94,6 +94,8 @@ class Part(BaseModel):
     current_step_index: int = 0
     status: ProcessStatus = ProcessStatus.PENDING
     created_at: datetime = Field(default_factory=now_ist)
+    # NEW: total units for this work order (backward compatible default)
+    total_quantity: int = 1
 
 class PartWithStepInfo(BaseModel):
     id: str
@@ -109,6 +111,8 @@ class PartCreate(BaseModel):
     part_number: str
     project_id: str
     process_steps: List[str]  # Required custom process steps for this work order
+    # NEW: optional at creation time; default to 1 if not provided
+    total_quantity: Optional[int] = 1
 
 class ProcessInstance(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -122,6 +126,10 @@ class ProcessInstance(BaseModel):
     start_qr_code: str = Field(default_factory=lambda: str(uuid.uuid4()))
     end_qr_code: str = Field(default_factory=lambda: str(uuid.uuid4()))
     created_at: datetime = Field(default_factory=now_ist)
+    # NEW: quantity tracking for this step
+    remaining_count: int = 0
+    in_progress_count: int = 0
+    completed_count: int = 0
 
 class WorkOrderQRCode(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -145,6 +153,8 @@ class ProcessActionRequest(BaseModel):
     password: str
     process_index: int
     action: str  # "start" or "end"
+    # NEW: number of units being started/finished (default 1)
+    quantity: Optional[int] = 1
 
 class ChangePasswordRequest(BaseModel):
     current_password: str
@@ -371,16 +381,24 @@ async def create_part(part_data: PartCreate, current_user: User = Depends(get_cu
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
     
+    # Determine total quantity with backward-compatible default
+    total_qty = part_data.total_quantity if part_data.total_quantity and part_data.total_quantity > 0 else 1
+    
     # Create part
-    part = Part(**part_data.dict(exclude={'process_steps'}))
+    part = Part(**part_data.dict(exclude={'process_steps'}), total_quantity=total_qty)
     await db.parts.insert_one(part.dict())
     
     # Create process instances using the custom process steps (not project's default steps)
     for i, step_name in enumerate(part_data.process_steps):
+        # Initialize counts: step 0 remaining = total, others 0
         process_instance = ProcessInstance(
             part_id=part.id,
             step_name=step_name,
-            step_index=i
+            step_index=i,
+            remaining_count=total_qty if i == 0 else 0,
+            in_progress_count=0,
+            completed_count=0,
+            status=ProcessStatus.PENDING
         )
         await db.process_instances.insert_one(process_instance.dict())
     
@@ -497,147 +515,61 @@ async def get_part_qr_codes_pdf(part_id: str, current_user: User = Depends(get_c
 
     The resulting file is named according to the pattern:
       "(<work_order_number>) - Work Order QR Code.pdf"
-
-    where <work_order_number> is retrieved from the part's `part_number` field. If the
-    part is not found, the `part_id` is used instead.
     """
-    # Get the work order QR code
+    # Get work order QR code
     work_order_qr = await db.work_order_qr_codes.find_one({"part_id": part_id})
-    
-    # If no QR code exists yet for this work order, create one
     if not work_order_qr:
         work_order_qr = WorkOrderQRCode(part_id=part_id)
         await db.work_order_qr_codes.insert_one(work_order_qr.dict())
         work_order_qr = await db.work_order_qr_codes.find_one({"part_id": part_id})
     
-    # Get part information
+    # Get part and process information
     part = await db.parts.find_one({"id": part_id})
     if not part:
         raise HTTPException(status_code=404, detail="Part not found")
     
-    # Get project information
-    project = await db.projects.find_one({"id": part["project_id"]})
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-    
-    # Get process instances
     process_instances = await db.process_instances.find({"part_id": part_id}).sort("step_index", 1).to_list(100)
-    if not process_instances:
-        raise HTTPException(status_code=404, detail="No process instances found for this part")
 
-    # Generate QR code image
-    qr_data_url = generate_qr_code(work_order_qr["qr_code"])
-    try:
-        qr_base64 = qr_data_url.split(",", 1)[1]
-        qr_bytes = base64.b64decode(qr_base64)
-        qr_img = Image.open(BytesIO(qr_bytes)).convert("RGB")
-    except Exception:
-        raise HTTPException(status_code=500, detail="Failed to generate QR code image")
-
-    # Download and process Velar Makine logo
-    logo_img = None
-    try:
-        import urllib.request
-        with urllib.request.urlopen("https://customer-assets.emergentagent.com/job_metalops/artifacts/i1dybgg7_Velar%20Makine%20Logo%20SVG.png") as response:
-            logo_data = response.read()
-            logo_img = Image.open(BytesIO(logo_data)).convert("RGBA")
-    except Exception:
-        # Logo loading failed, continue without logo
-        pass
-
-    # Define page dimensions (A4 at 300 DPI)
-    page_width = 2480
-    page_height = 3508
-    margin = 120
-    header_height = 150
-    
-    # Create a blank page
-    page_img = Image.new('RGB', (page_width, page_height), 'white')
+    # Create a blank A4 page (at 300 DPI)
+    dpi = 300
+    width, height = int(8.27 * dpi), int(11.69 * dpi)  # A4 dimensions in pixels
+    page_img = Image.new('RGB', (width, height), color=(255, 255, 255))
     draw_page = ImageDraw.Draw(page_img)
-    
-    # Load fonts with fallback to default
+
+    # Fonts (using default PIL fonts)
     try:
-        font_title = ImageFont.truetype("DejaVuSans-Bold.ttf", 60)
-        font_subtitle = ImageFont.truetype("DejaVuSans-Bold.ttf", 40)
-        font_header = ImageFont.truetype("DejaVuSans-Bold.ttf", 36)  # For system title
-        font_info = ImageFont.truetype("DejaVuSans.ttf", 32)
-        font_steps_title = ImageFont.truetype("DejaVuSans-Bold.ttf", 48)  # ENLARGED from 36 to 48
-        font_steps = ImageFont.truetype("DejaVuSans.ttf", 38)  # ENLARGED from 28 to 38
-        font_date = ImageFont.truetype("DejaVuSans.ttf", 28)
-    except Exception:
+        font_title = ImageFont.truetype("arial.ttf", 60)
+        font_subtitle = ImageFont.truetype("arial.ttf", 36)
+        font_steps_title = ImageFont.truetype("arial.ttf", 42)  # Larger title for steps
+        font_steps = ImageFont.truetype("arial.ttf", 28)        # Larger font for steps
+    except:
         font_title = ImageFont.load_default()
         font_subtitle = ImageFont.load_default()
-        font_header = ImageFont.load_default()
-        font_info = ImageFont.load_default()
         font_steps_title = ImageFont.load_default()
         font_steps = ImageFont.load_default()
-        font_date = ImageFont.load_default()
-    
-    # Draw header section
-    current_y = margin
-    
-    # Draw logo in top left corner (if available) - SIGNIFICANTLY ENLARGED
-    if logo_img:
-        logo_size = 160  # Height of logo - DOUBLED from 80 to 160
-        # Calculate width maintaining aspect ratio
-        logo_aspect_ratio = logo_img.width / logo_img.height
-        logo_width = int(logo_size * logo_aspect_ratio)
-        
-        # Resize logo
-        logo_resized = logo_img.resize((logo_width, logo_size), Image.LANCZOS)
-        
-        # Create a white background for the logo (in case it has transparency)
-        logo_bg = Image.new('RGB', (logo_width, logo_size), 'white')
-        if logo_resized.mode == 'RGBA':
-            logo_bg.paste(logo_resized, (0, 0), logo_resized)
-        else:
-            logo_bg.paste(logo_resized, (0, 0))
-        
-        page_img.paste(logo_bg, (margin, current_y))
-        logo_right_edge = margin + logo_width + 40  # Increased padding for larger logo
-    else:
-        logo_right_edge = margin
-    
-    # Draw system title next to logo
-    system_title = "Velar Makine Üretim Takip Sistemi"
-    draw_page.text((logo_right_edge, current_y + 25), system_title, fill=(0, 0, 0), font=font_header)
-    
-    # Draw current date in top right corner
-    current_date = now_ist().strftime("%d/%m/%Y")
-    date_text = f"Tarih: {current_date}"
-    date_width = draw_page.textlength(date_text, font=font_date)
-    draw_page.text((page_width - margin - date_width, current_y + 25), date_text, fill=(0, 0, 0), font=font_date)
-    
-    # Move down after header
-    current_y += header_height
-    
-    # Draw work order title
-    title = f"İş Emri: {part['part_number']}"
-    draw_page.text((margin, current_y), title, fill=(0, 0, 0), font=font_title)
-    current_y += 80
-    
-    # Draw project info
-    project_info = f"Proje: {project['name']}"
-    draw_page.text((margin, current_y), project_info, fill=(0, 0, 0), font=font_subtitle)
-    current_y += 80
-    
-    # Draw QR code (large, centered)
-    qr_size = 800
-    try:
-        resized_qr = qr_img.resize((qr_size, qr_size), resample=Image.NEAREST)
-    except Exception:
-        resized_qr = qr_img.resize((qr_size, qr_size))
-    
-    qr_x = (page_width - qr_size) // 2
-    qr_y = current_y + 20
-    page_img.paste(resized_qr, (qr_x, qr_y))
-    
-    # Draw QR code value
-    qr_code_text = f"QR Kod: {work_order_qr['qr_code']}"
-    text_width = draw_page.textlength(qr_code_text, font=font_info)
+
+    # Margins and layout
+    margin = 80
+    qr_size = 600
+    qr_x = margin
+    qr_y = margin
+
+    # Draw QR code image
+    qr_img_data = base64.b64decode(generate_qr_code(work_order_qr["qr_code"]).split(",")[1])
+    qr_image = Image.open(BytesIO(qr_img_data))
+    qr_image = qr_image.resize((qr_size, qr_size))
+    page_img.paste(qr_image, (qr_x, qr_y))
+
+    # Draw work order info
+    text_x = qr_x + qr_size + 40
+    text_y = qr_y
+    draw_page.text((text_x, text_y), f"İş Emri: {part['part_number']}", fill=(0, 0, 0), font=font_title)
+    draw_page.text((text_x, text_y + 80), f"Durum: {part['status']}", fill=(0, 0, 0), font=font_subtitle)
+
+    # Additional Information under QR Code
     qr_text_y = qr_y + qr_size + 40
-    draw_page.text(((page_width - text_width) // 2, qr_text_y), qr_code_text, fill=(0, 0, 0), font=font_info)
-    
+    draw_page.text((margin, qr_text_y), "Bu QR kodu iş emrini temsil eder.", fill=(0, 0, 0), font=font_subtitle)
+
     # Draw process steps with larger fonts
     steps_y = qr_text_y + 80
     steps_title = "İş Akış Adımları:"
@@ -697,45 +629,76 @@ async def scan_work_order_qr(scan_data: WorkOrderScanRequest, current_user: User
     if not part:
         raise HTTPException(status_code=404, detail="Work order not found")
     
+    # Ensure total_quantity exists
+    if "total_quantity" not in part or not part.get("total_quantity"):
+        await db.parts.update_one({"id": part["id"]}, {"$set": {"total_quantity": 1}})
+        part = await db.parts.find_one({"id": work_order_qr["part_id"]})
+    total_qty = part.get("total_quantity", 1)
+    
     # Get process instances
     process_instances = await db.process_instances.find({"part_id": part["id"]}).sort("step_index", 1).to_list(100)
+
+    # Backward-compatibility: initialize counts if missing and there is no data yet
+    if process_instances:
+        sums = {"remaining": 0, "in_progress": 0, "completed": 0}
+        missing_any_field = False
+        for pi in process_instances:
+            if "remaining_count" not in pi or "in_progress_count" not in pi or "completed_count" not in pi:
+                missing_any_field = True
+            sums["remaining"] += pi.get("remaining_count", 0)
+            sums["in_progress"] += pi.get("in_progress_count", 0)
+            sums["completed"] += pi.get("completed_count", 0)
+        if missing_any_field or (sums["remaining"] + sums["in_progress"] + sums["completed"]) == 0:
+            # initialize counts: step 0 gets all remaining
+            for i, pi in enumerate(process_instances):
+                await db.process_instances.update_one(
+                    {"id": pi["id"]},
+                    {"$set": {
+                        "remaining_count": total_qty if i == 0 else 0,
+                        "in_progress_count": 0,
+                        "completed_count": 0,
+                        "status": pi.get("status", ProcessStatus.PENDING)
+                    }}
+                )
+            # re-fetch after init
+            process_instances = await db.process_instances.find({"part_id": part["id"]}).sort("step_index", 1).to_list(100)
     
-    # Get current step information
-    current_step_index = part["current_step_index"]
+    # Determine dynamic current step index (earliest not fully completed step)
+    dynamic_current_idx = 0
+    for pi in process_instances:
+        if pi.get("completed_count", 0) >= total_qty:
+            dynamic_current_idx = pi["step_index"] + 1
+        else:
+            dynamic_current_idx = pi["step_index"]
+            break
+    dynamic_current_idx = min(dynamic_current_idx, max(0, len(process_instances) - 1)) if process_instances else 0
+
+    current_step_index = dynamic_current_idx
     current_step_name = "Not started"
     if process_instances and current_step_index < len(process_instances):
         current_step_name = process_instances[current_step_index]["step_name"]
     
-    # Determine which processes can be started or ended based on the workflow rules
+    # Determine which processes can be started or ended based on counts
     available_processes = []
     for pi in process_instances:
-        process = ProcessInstance(**pi)
-        can_start = False
-        can_end = False
-        
-        # A process can be started if:
-        # 1. It's the current step and in PENDING status
-        # 2. All previous steps are COMPLETED
-        if process.step_index == current_step_index and process.status == ProcessStatus.PENDING:
-            # Check if all previous steps are completed
-            all_previous_completed = True
-            for prev_pi in process_instances:
-                if prev_pi["step_index"] < process.step_index and prev_pi["status"] != ProcessStatus.COMPLETED:
-                    all_previous_completed = False
-                    break
-            
-            can_start = all_previous_completed
-        
-        # A process can be ended if it's in IN_PROGRESS status
-        if process.status == ProcessStatus.IN_PROGRESS:
-            can_end = True
+        remaining = pi.get("remaining_count", 0)
+        in_prog = pi.get("in_progress_count", 0)
+        completed = pi.get("completed_count", 0)
+        process_status = pi.get("status", ProcessStatus.PENDING)
+
+        can_start = remaining > 0
+        can_end = in_prog > 0
         
         available_processes.append({
-            "step_index": process.step_index,
-            "step_name": process.step_name,
-            "status": process.status,
+            "step_index": pi["step_index"],
+            "step_name": pi["step_name"],
+            "status": process_status,
             "can_start": can_start,
-            "can_end": can_end
+            "can_end": can_end,
+            # NEW: expose counts so UI can show limits
+            "remaining_count": remaining,
+            "in_progress_count": in_prog,
+            "completed_count": completed
         })
     
     return {
@@ -745,7 +708,8 @@ async def scan_work_order_qr(scan_data: WorkOrderScanRequest, current_user: User
             "current_step_index": current_step_index,
             "current_step_name": current_step_name,
             "status": part["status"],
-            "total_steps": len(process_instances)
+            "total_steps": len(process_instances),
+            "total_quantity": total_qty
         },
         "processes": available_processes,
         "qr_code": work_order_qr["qr_code"],
@@ -780,119 +744,192 @@ async def process_action(action_data: ProcessActionRequest, current_user: User =
     part = await db.parts.find_one({"id": work_order_qr["part_id"]})
     if not part:
         raise HTTPException(status_code=404, detail="Work order not found")
+    if "total_quantity" not in part or not part.get("total_quantity"):
+        await db.parts.update_one({"id": part["id"]}, {"$set": {"total_quantity": 1}})
+        part = await db.parts.find_one({"id": work_order_qr["part_id"]})
+    total_qty = part.get("total_quantity", 1)
     
     # Get process instances
     process_instances = await db.process_instances.find({"part_id": part["id"]}).sort("step_index", 1).to_list(100)
+
+    # Initialize counts if missing for backward compatibility
+    if process_instances:
+        sums = {"remaining": 0, "in_progress": 0, "completed": 0}
+        missing_any_field = False
+        for pi in process_instances:
+            if "remaining_count" not in pi or "in_progress_count" not in pi or "completed_count" not in pi:
+                missing_any_field = True
+            sums["remaining"] += pi.get("remaining_count", 0)
+            sums["in_progress"] += pi.get("in_progress_count", 0)
+            sums["completed"] += pi.get("completed_count", 0)
+        if missing_any_field or (sums["remaining"] + sums["in_progress"] + sums["completed"]) == 0:
+            for i, pi in enumerate(process_instances):
+                await db.process_instances.update_one(
+                    {"id": pi["id"]},
+                    {"$set": {
+                        "remaining_count": total_qty if i == 0 else 0,
+                        "in_progress_count": 0,
+                        "completed_count": 0,
+                        "status": pi.get("status", ProcessStatus.PENDING)
+                    }}
+                )
+            process_instances = await db.process_instances.find({"part_id": part["id"]}).sort("step_index", 1).to_list(100)
     
     # Find the specific process instance
-    target_process = None
+    target_process_doc = None
     for pi in process_instances:
         if pi["step_index"] == action_data.process_index:
-            target_process = ProcessInstance(**pi)
+            target_process_doc = pi
             break
     
-    if not target_process:
+    if not target_process_doc:
         raise HTTPException(status_code=404, detail="Process not found")
-    
+
+    # Normalize quantity
+    qty = action_data.quantity if action_data.quantity and action_data.quantity > 0 else 1
+
+    # Ensure counts fields exist (backward compatibility)
+    target_remaining = target_process_doc.get("remaining_count", 0)
+    target_in_progress = target_process_doc.get("in_progress_count", 0)
+    target_completed = target_process_doc.get("completed_count", 0)
+
     # Handle start action
     if action_data.action == "start":
-        # Check if this step can be started (sequential enforcement)
-        if target_process.step_index > 0:
-            # Check if previous step is completed
-            prev_process = None
-            for pi in process_instances:
-                if pi["step_index"] == target_process.step_index - 1:
-                    prev_process = pi
-                    break
-            
-            if not prev_process or prev_process["status"] != ProcessStatus.COMPLETED:
-                raise HTTPException(status_code=400, detail="Previous step must be completed first")
-        
-        # Check if already started
-        if target_process.status == ProcessStatus.IN_PROGRESS:
-            raise HTTPException(status_code=400, detail="Process already started")
-        
-        if target_process.status == ProcessStatus.COMPLETED:
-            raise HTTPException(status_code=400, detail="Process already completed")
-        
-        # Start the process
+        # Validate available remaining
+        if target_remaining < qty:
+            raise HTTPException(status_code=400, detail=f"Insufficient remaining units to start. Available: {target_remaining}")
+
         now = now_ist()
+        # Atomically update counts
         await db.process_instances.update_one(
-            {"id": target_process.id},
+            {"id": target_process_doc["id"]},
             {
+                "$inc": {
+                    "remaining_count": -qty,
+                    "in_progress_count": qty
+                },
                 "$set": {
+                    # Set status to IN_PROGRESS if any work started
                     "status": ProcessStatus.IN_PROGRESS,
-                    "operator_id": user["id"],
-                    "start_time": now
-                }
+                },
+                "$setOnInsert": {"start_time": now}
             }
         )
-        
-        # Update part status
+
+        # Ensure start_time is set if it wasn't before
+        await db.process_instances.update_one(
+            {"id": target_process_doc["id"], "start_time": {"$exists": False}},
+            {"$set": {"start_time": now, "operator_id": user["id"]}}
+        )
+
+        # Update part status pointer (earliest not fully complete step)
+        # Re-fetch target and all steps to compute pointer
+        updated_instances = await db.process_instances.find({"part_id": part["id"]}).sort("step_index", 1).to_list(100)
+        new_idx = 0
+        for idx_pi in updated_instances:
+            if idx_pi.get("completed_count", 0) >= total_qty:
+                new_idx = idx_pi["step_index"] + 1
+            else:
+                new_idx = idx_pi["step_index"]
+                break
+        new_idx = min(new_idx, max(0, len(updated_instances) - 1)) if updated_instances else 0
         await db.parts.update_one(
             {"id": part["id"]},
-            {
-                "$set": {
-                    "current_step_index": target_process.step_index,
-                    "status": ProcessStatus.IN_PROGRESS
-                }
-            }
+            {"$set": {"current_step_index": new_idx, "status": ProcessStatus.IN_PROGRESS}}
         )
-        
+
         return {
             "message": "Process started successfully",
-            "step_name": target_process.step_name,
+            "step_name": target_process_doc["step_name"],
             "operator": user["username"],
-            "start_time": now
+            "quantity": qty,
+            "time": now
         }
     
     # Handle end action
     elif action_data.action == "end":
-        # Check if process was started
-        if target_process.status != ProcessStatus.IN_PROGRESS:
-            raise HTTPException(status_code=400, detail="Process must be started first")
-        
-        # Complete the process
+        # Validate in-progress available
+        if target_in_progress < qty:
+            raise HTTPException(status_code=400, detail=f"Insufficient in-progress units to complete. Available: {target_in_progress}")
+
         now = now_ist()
+        # Complete units for this process
         await db.process_instances.update_one(
-            {"id": target_process.id},
+            {"id": target_process_doc["id"]},
             {
+                "$inc": {
+                    "in_progress_count": -qty,
+                    "completed_count": qty
+                },
                 "$set": {
-                    "status": ProcessStatus.COMPLETED,
-                    "end_time": now
+                    "status": ProcessStatus.IN_PROGRESS  # may change below if fully complete
                 }
             }
         )
-        
-        # Update part status
-        if target_process.step_index == len(process_instances) - 1:
-            # This was the last step
-            await db.parts.update_one(
-                {"id": part["id"]},
-                {
-                    "$set": {
-                        "status": ProcessStatus.COMPLETED,
-                        "current_step_index": target_process.step_index
-                    }
-                }
+
+        # Move units to next step's remaining, if any
+        next_step_index = target_process_doc["step_index"] + 1
+        if next_step_index < len(process_instances):
+            next_process = process_instances[next_step_index]
+            await db.process_instances.update_one(
+                {"id": next_process["id"]},
+                {"$inc": {"remaining_count": qty}}
+            )
+
+        # Re-evaluate status for this process after update
+        updated = await db.process_instances.find_one({"id": target_process_doc["id"]})
+        updated_completed = updated.get("completed_count", 0)
+        updated_remaining = updated.get("remaining_count", 0)
+        updated_in_prog = updated.get("in_progress_count", 0)
+
+        if updated_completed >= total_qty:
+            # fully completed
+            await db.process_instances.update_one(
+                {"id": target_process_doc["id"]},
+                {"$set": {"status": ProcessStatus.COMPLETED, "end_time": now}}
+            )
+        elif updated_in_prog > 0 or updated_completed > 0:
+            await db.process_instances.update_one(
+                {"id": target_process_doc["id"]},
+                {"$set": {"status": ProcessStatus.IN_PROGRESS}}
             )
         else:
-            # Update current step index to the next step
+            await db.process_instances.update_one(
+                {"id": target_process_doc["id"]},
+                {"$set": {"status": ProcessStatus.PENDING}}
+            )
+
+        # Update part status and pointer
+        updated_instances = await db.process_instances.find({"part_id": part["id"]}).sort("step_index", 1).to_list(100)
+        last_index = len(updated_instances) - 1 if updated_instances else 0
+        # Determine if fully done
+        final_completed = updated_instances[last_index].get("completed_count", 0) if updated_instances else 0
+        if updated_instances and final_completed >= total_qty:
             await db.parts.update_one(
                 {"id": part["id"]},
-                {
-                    "$set": {
-                        "current_step_index": target_process.step_index + 1,
-                        "status": ProcessStatus.IN_PROGRESS
-                    }
-                }
+                {"$set": {"status": ProcessStatus.COMPLETED, "current_step_index": last_index}}
+            )
+        else:
+            # Move pointer to earliest not fully completed step
+            new_idx = 0
+            for idx_pi in updated_instances:
+                if idx_pi.get("completed_count", 0) >= total_qty:
+                    new_idx = idx_pi["step_index"] + 1
+                else:
+                    new_idx = idx_pi["step_index"]
+                    break
+            new_idx = min(new_idx, max(0, len(updated_instances) - 1)) if updated_instances else 0
+            await db.parts.update_one(
+                {"id": part["id"]},
+                {"$set": {"current_step_index": new_idx, "status": ProcessStatus.IN_PROGRESS}}
             )
         
         return {
             "message": "Process completed successfully",
-            "step_name": target_process.step_name,
+            "step_name": target_process_doc["step_name"],
             "operator": user["username"],
-            "end_time": now
+            "quantity": qty,
+            "time": now
         }
     
     else:
@@ -1055,21 +1092,60 @@ async def get_dashboard_overview(current_user: User = Depends(get_current_user))
         project = project_lookup.get(part["project_id"])
         if project:
             # Get the actual process instances for this part to determine current step
-            process_instances = await db.process_instances.find({"part_id": part["id"]}).to_list(100)
+            process_instances = await db.process_instances.find({"part_id": part["id"]}).sort("step_index", 1).to_list(100)
+            total_qty = part.get("total_quantity", 1)
             
             # Find current step from actual process instances (not project defaults)
             current_step = "Completed"
-            if part["current_step_index"] < len(process_instances):
-                # Sort process instances by step_index to ensure correct order
-                process_instances.sort(key=lambda x: x["step_index"])
-                current_step = process_instances[part["current_step_index"]]["step_name"]
+            # Compute dynamic current step index based on completion counts
+            current_idx = 0
+            for pi in process_instances:
+                if pi.get("completed_count", 0) >= total_qty:
+                    current_idx = pi["step_index"] + 1
+                else:
+                    current_idx = pi["step_index"]
+                    break
+            if process_instances and current_idx < len(process_instances):
+                current_step = process_instances[current_idx]["step_name"]
+            
+            # Aggregate counts for dashboard
+            total_remaining = 0
+            total_in_progress = 0
+            total_completed = 0
+            per_step_counts = []
+            for pi in process_instances:
+                remaining = pi.get("remaining_count", 0)
+                in_prog = pi.get("in_progress_count", 0)
+                completed = pi.get("completed_count", 0)
+                per_step_counts.append({
+                    "step_index": pi["step_index"],
+                    "step_name": pi["step_name"],
+                    "remaining_count": remaining,
+                    "in_progress_count": in_prog,
+                    "completed_count": completed,
+                })
+                total_in_progress += in_prog
+            # Overall remaining = units not yet started anywhere (step 0 remaining)
+            if process_instances:
+                total_remaining = process_instances[0].get("remaining_count", 0)
+                # Overall completed = units completed at final step
+                total_completed = process_instances[-1].get("completed_count", 0)
             
             dashboard_data.append({
                 "part": Part(**part),
                 "project": Project(**project),
                 "current_step": current_step,
                 "total_steps": len(process_instances),  # Actual number of steps for this work order
-                "progress_percentage": ((part["current_step_index"] + 1) / len(process_instances)) * 100 if len(process_instances) > 0 else 0
+                "progress_percentage": (total_completed / total_qty) * 100 if total_qty > 0 else 0,
+                # NEW summary counts
+                "total_quantity": total_qty,
+                "summary_counts": {
+                    "remaining": total_remaining,
+                    "in_progress": total_in_progress,
+                    "completed": total_completed,
+                },
+                # NEW per-step counts
+                "per_step_counts": per_step_counts,
             })
     
     return dashboard_data
@@ -1100,7 +1176,7 @@ async def get_process_durations(current_user: User = Depends(get_current_user)):
         project = await db.projects.find_one({"id": part["project_id"]}) if part else None
         
         # Get operator information
-        operator = await db.users.find_one({"id": process["operator_id"]}) if process.get("operator_id") else None
+        operator = await db.users.find_one({"id": process.get("operator_id")}) if process.get("operator_id") else None
         
         duration_data.append({
             "id": process["id"],
