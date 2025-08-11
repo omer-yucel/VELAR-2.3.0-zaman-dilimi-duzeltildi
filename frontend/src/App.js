@@ -363,6 +363,7 @@ const OperatorScanner = () => {
   const [workOrderData, setWorkOrderData] = useState(null);
   const [selectedProcess, setSelectedProcess] = useState(null);
   const [actionType, setActionType] = useState('start');
+  const [units, setUnits] = useState('');
   const [showProcessSelection, setShowProcessSelection] = useState(false);
   // New state for confirmation message
   const [showConfirmationMessage, setShowConfirmationMessage] = useState(false);
@@ -508,7 +509,8 @@ const OperatorScanner = () => {
         username: user.username,
         password: 'session_authenticated',
         process_index: selectedProcess.step_index,
-        action: actionType
+        action: actionType,
+        units: Number(units) || 1
       });
 
       setResult(response.data);
@@ -521,6 +523,7 @@ const OperatorScanner = () => {
         setResult(null);
         setWorkOrderData(null);
         setSelectedProcess(null);
+        setUnits('');
         setShowProcessSelection(false);
         setQrCode('');
         setShowConfirmationMessage(false);
@@ -571,6 +574,7 @@ const OperatorScanner = () => {
   // Handle process selection
   const handleProcessSelect = (process) => {
     setSelectedProcess(process);
+    setUnits('');
   };
 
   return (
@@ -627,6 +631,20 @@ const OperatorScanner = () => {
                 <CardDescription className="text-gray-300">
                   Mevcut Adım: {workOrderData.work_order.current_step_name} ({workOrderData.work_order.current_step_index + 1}/{workOrderData.work_order.total_steps})
                 </CardDescription>
+                <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
+                  <div className="bg-white/5 rounded p-2 text-center">
+                    <div className="text-gray-400">Toplam</div>
+                    <div className="text-white font-semibold">{workOrderData.work_order.quantity ?? 1}</div>
+                  </div>
+                  <div className="bg-white/5 rounded p-2 text-center">
+                    <div className="text-gray-400">Devam</div>
+                    <div className="text-white font-semibold">{workOrderData.work_order.in_progress_units ?? 0}</div>
+                  </div>
+                  <div className="bg-white/5 rounded p-2 text-center">
+                    <div className="text-gray-400">Bitti</div>
+                    <div className="text-white font-semibold">{workOrderData.work_order.completed_units ?? 0}</div>
+                  </div>
+                </div>
               </CardHeader>
               
               <CardContent className="space-y-6">
@@ -706,6 +724,25 @@ const OperatorScanner = () => {
                           Bitir
                         </Button>
                       )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Units input */}
+                {selectedProcess && (
+                  <div>
+                    <label className="block text-sm font-medium text-white mb-2">Adet</label>
+                    <Input
+                      type="number"
+                      min="1"
+                      placeholder="İşlem görecek adet"
+                      value={units || ''}
+                      onChange={(e) => setUnits(e.target.value)}
+                      className="bg-white/10 border-white/20 text-white placeholder:text-gray-400"
+                      required
+                    />
+                    <div className="text-xs text-gray-400 mt-1">
+                      Başlatılabilir: {selectedProcess.can_start ? Math.max((workOrderData.work_order.quantity ?? 1) - (selectedProcess.started_units ?? 0), 0) : 0} | Bitirilebilir: {selectedProcess.can_end ? Math.max((selectedProcess.started_units ?? 0) - (selectedProcess.completed_units ?? 0), 0) : 0}
                     </div>
                   </div>
                 )}
@@ -995,6 +1032,7 @@ const QRScanner = () => {
   const [workOrderData, setWorkOrderData] = useState(null);
   const [selectedProcess, setSelectedProcess] = useState(null);
   const [actionType, setActionType] = useState('start');
+  const [units, setUnits] = useState('');
   const [showProcessSelection, setShowProcessSelection] = useState(false);
 
   // Handle scanning a work order QR code
@@ -1042,7 +1080,8 @@ const QRScanner = () => {
         username,
         password,
         process_index: selectedProcess.step_index,
-        action: actionType
+        action: actionType,
+        units: Number(units) || 1
       });
 
       setResult(response.data);
@@ -1051,6 +1090,7 @@ const QRScanner = () => {
       setSelectedProcess(null);
       setWorkOrderData(null);
       setShowProcessSelection(false);
+      setUnits('');
       setUsername('');
       setPassword('');
       
@@ -1136,6 +1176,20 @@ const QRScanner = () => {
             <CardDescription className="text-gray-300">
               Mevcut Adım: {workOrderData.work_order.current_step_name} ({workOrderData.work_order.current_step_index + 1}/{workOrderData.work_order.total_steps})
             </CardDescription>
+            <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
+              <div className="bg-white/5 rounded p-2 text-center">
+                <div className="text-gray-400">Toplam</div>
+                <div className="text-white font-semibold">{workOrderData.work_order.quantity ?? 1}</div>
+              </div>
+              <div className="bg-white/5 rounded p-2 text-center">
+                <div className="text-gray-400">Devam</div>
+                <div className="text-white font-semibold">{workOrderData.work_order.in_progress_units ?? 0}</div>
+              </div>
+              <div className="bg-white/5 rounded p-2 text-center">
+                <div className="text-gray-400">Bitti</div>
+                <div className="text-white font-semibold">{workOrderData.work_order.completed_units ?? 0}</div>
+              </div>
+            </div>
           </CardHeader>
           <CardContent>
             <form onSubmit={handleProcessAction} className="space-y-4">
@@ -1203,6 +1257,25 @@ const QRScanner = () => {
                       )}
                     </SelectContent>
                   </Select>
+                </div>
+              )}
+
+              {/* Units input */}
+              {selectedProcess && (
+                <div>
+                  <label className="block text-sm font-medium text-white mb-2">Adet</label>
+                  <Input
+                    type="number"
+                    min="1"
+                    placeholder="İşlem görecek adet"
+                    value={units || ''}
+                    onChange={(e) => setUnits(e.target.value)}
+                    className="bg-white/10 border-white/20 text-white placeholder:text-gray-400"
+                    required
+                  />
+                  <div className="text-xs text-gray-400 mt-1">
+                    Başlatılabilir: {selectedProcess.can_start ? Math.max((workOrderData.work_order.quantity ?? 1) - (selectedProcess.started_units ?? 0), 0) : 0} | Bitirilebilir: {selectedProcess.can_end ? Math.max((selectedProcess.started_units ?? 0) - (selectedProcess.completed_units ?? 0), 0) : 0}
+                  </div>
                 </div>
               )}
               
@@ -1319,22 +1392,36 @@ const Dashboard = () => {
             <CardContent>
               <div className="flex items-center justify-between">
                 <span className="text-gray-300">Current Step:</span>
-                <span className="text-white font-medium">{item.current_step}</span>
-              </div>
-              <div className="mt-4">
-                <div className="flex justify-between text-sm text-gray-400 mb-2">
-                  <span>Progress</span>
-                  <span>{item.part.current_step_index + 1} / {item.total_steps}</span>
+                                   <span className="text-white font-medium">{item.current_step}</span>
                 </div>
-                <div className="w-full bg-gray-700 rounded-full h-2">
-                  <div 
-                    className="bg-blue-600 h-2 rounded-full transition-all duration-300"
-                    style={{ 
-                      width: `${item.progress_percentage}%` 
-                    }}
-                  ></div>
+                <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
+                  <div className="bg-white/5 rounded p-2 text-center">
+                    <div className="text-gray-400">Toplam</div>
+                    <div className="text-white font-semibold">{item.quantity ?? item.part.quantity ?? 1}</div>
+                  </div>
+                  <div className="bg-white/5 rounded p-2 text-center">
+                    <div className="text-gray-400">Devam</div>
+                    <div className="text-white font-semibold">{item.in_progress_units ?? 0}</div>
+                  </div>
+                  <div className="bg-white/5 rounded p-2 text-center">
+                    <div className="text-gray-400">Bitti</div>
+                    <div className="text-white font-semibold">{item.completed_units ?? 0}</div>
+                  </div>
                 </div>
-              </div>
+                <div className="mt-4">
+                  <div className="flex justify-between text-sm text-gray-400 mb-2">
+                    <span>Progress</span>
+                    <span>{item.part.current_step_index + 1} / {item.total_steps}</span>
+                  </div>
+                  <div className="w-full bg-gray-700 rounded-full h-2">
+                    <div 
+                      className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                      style={{ 
+                        width: `${item.progress_percentage}%` 
+                      }}
+                    ></div>
+                  </div>
+                </div>
             </CardContent>
           </Card>
         ))}
@@ -1365,6 +1452,7 @@ const Projects = () => {
   const [deleteItemName, setDeleteItemName] = useState('');
   const [selectedSteps, setSelectedSteps] = useState([]);
   const [showStepSelector, setShowStepSelector] = useState(false);
+  const [newQuantity, setNewQuantity] = useState(1);
 
   // Available manufacturing steps
   const availableSteps = [
@@ -1470,12 +1558,14 @@ const Projects = () => {
       await axios.post(`${API}/parts`, {
         part_number: newPartNumber,
         project_id: selectedProject,
+        quantity: Number(newQuantity) || 1,
         process_steps: selectedSteps
       });
       
       setNewPartNumber('');
       setSelectedProject('');
       setSelectedSteps([]);
+      setNewQuantity(1);
       setShowStepSelector(false);
       fetchProjectsWithParts();
     } catch (error) {
@@ -1649,6 +1739,18 @@ const Projects = () => {
                 placeholder="İş Emri No"
                 value={newPartNumber}
                 onChange={(e) => setNewPartNumber(e.target.value)}
+                className="bg-white/10 border-white/20 text-white placeholder:text-gray-400"
+                required
+              />
+            </div>
+
+            <div>
+              <Input
+                type="number"
+                min="1"
+                placeholder="Adet (Zorunlu)"
+                value={newQuantity}
+                onChange={(e) => setNewQuantity(e.target.value)}
                 className="bg-white/10 border-white/20 text-white placeholder:text-gray-400"
                 required
               />
@@ -1857,6 +1959,20 @@ const Projects = () => {
                             <span className="text-white font-medium">{part.part_number}</span>
                             <div className="text-sm text-gray-300 mt-1">
                               Adım: {part.current_step_index + 1} / {part.total_steps}
+                            </div>
+                            <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
+                              <div className="bg-white/5 rounded p-2 text-center">
+                                <div className="text-gray-400">Toplam</div>
+                                <div className="text-white font-semibold">{part.quantity ?? 1}</div>
+                              </div>
+                              <div className="bg-white/5 rounded p-2 text-center">
+                                <div className="text-gray-400">Devam</div>
+                                <div className="text-white font-semibold">{part.in_progress_units ?? 0}</div>
+                              </div>
+                              <div className="bg-white/5 rounded p-2 text-center">
+                                <div className="text-gray-400">Bitti</div>
+                                <div className="text-white font-semibold">{part.completed_units ?? 0}</div>
+                              </div>
                             </div>
                           </div>
                           <Badge className={`${getStatusColor(part.status)} text-white`}>
