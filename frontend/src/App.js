@@ -9,6 +9,7 @@ import { Badge } from './components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './components/ui/tabs';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './components/ui/select';
 import { QrCode, Factory, Scan, Users, BarChart3, Settings, LogOut, Camera, CheckCircle, Clock, Play, Pause, Plus, X, ChevronUp, ChevronDown, List, Database, Download, Loader2 } from 'lucide-react';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from './components/ui/dialog';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
@@ -233,6 +234,114 @@ const Login = () => {
           </form>
         </CardContent>
       </Card>
+    </div>
+  );
+};
+
+// Change Password Page
+const ChangePassword = () => {
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [successOpen, setSuccessOpen] = useState(false);
+  const navigate = useNavigate();
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError('');
+    if (newPassword !== confirmPassword) {
+      setError('Yeni şifre ve doğrulama eşleşmiyor');
+      return;
+    }
+    try {
+      setLoading(true);
+      await axios.post(`${API}/users/change-password`, {
+        current_password: currentPassword,
+        new_password: newPassword,
+      });
+      setSuccessOpen(true);
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Şifre değiştirilemedi');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-gray-900 to-slate-800 flex items-center justify-center p-4">
+      <Card className="w-full max-w-md bg-white/10 backdrop-blur-lg border-white/20">
+        <CardHeader className="text-center">
+          <CardTitle className="text-2xl text-white">Şifre Değiştir</CardTitle>
+          <CardDescription className="text-gray-300">Hesap şifrenizi güncelleyin</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div>
+              <Input
+                type="password"
+                placeholder="Mevcut Şifre"
+                value={currentPassword}
+                onChange={(e) => setCurrentPassword(e.target.value)}
+                className="bg-white/10 border-white/20 text-white placeholder:text-gray-400"
+                required
+              />
+            </div>
+            <div>
+              <Input
+                type="password"
+                placeholder="Yeni Şifre"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                className="bg-white/10 border-white/20 text-white placeholder:text-gray-400"
+                required
+              />
+            </div>
+            <div>
+              <Input
+                type="password"
+                placeholder="Yeni Şifre (Tekrar)"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                className="bg-white/10 border-white/20 text-white placeholder:text-gray-400"
+                required
+              />
+            </div>
+            {error && <div className="text-red-400 text-sm text-center">{error}</div>}
+            <div className="flex gap-2">
+              <Button 
+                type="button"
+                variant="outline"
+                className="w-1/3 border-white/20 text-white hover:bg-white/10"
+                onClick={() => navigate(-1)}
+              >Geri</Button>
+              <Button 
+                type="submit" 
+                className="w-2/3 bg-blue-600 hover:bg-blue-700"
+                disabled={loading}
+              >{loading ? 'Kaydediliyor...' : 'Şifreyi Değiştir'}</Button>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
+
+      <Dialog open={successOpen} onOpenChange={setSuccessOpen}>
+        <DialogContent className="bg-white/10 border-white/20 text-white">
+          <DialogHeader>
+            <DialogTitle>Başarılı</DialogTitle>
+            <DialogDescription className="text-gray-300">
+              Şifreniz başarıyla değiştirildi.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end">
+            <Button onClick={() => { setSuccessOpen(false); navigate('/dashboard'); }} className="bg-blue-600 hover:bg-blue-700">Tamam</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
@@ -480,15 +589,25 @@ const OperatorScanner = () => {
               <p className="text-sm text-gray-300">Operator: {user?.username}</p>
             </div>
           </div>
-          <Button 
-            onClick={logout} 
-            variant="outline" 
-            size="sm"
-            className="border-white/20 text-white hover:bg-white/10"
-          >
-            <LogOut className="h-4 w-4 mr-2" />
-            Çıkış Yap
-          </Button>
+          <div className="flex gap-2">
+            <Button 
+              onClick={() => window.location.href = '/change-password'} 
+              variant="outline" 
+              size="sm"
+              className="border-white/20 text-white hover:bg-white/10"
+            >
+              Şifre Değiştir
+            </Button>
+            <Button 
+              onClick={logout} 
+              variant="outline" 
+              size="sm"
+              className="border-white/20 text-white hover:bg-white/10"
+            >
+              <LogOut className="h-4 w-4 mr-2" />
+              Çıkış Yap
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -770,7 +889,7 @@ const OperatorScanner = () => {
                     <div className="space-y-1 text-sm">
                       <p className="text-white font-medium">{result.message}</p>
                       <p className="text-green-200">Process Step: {result.step_name}</p>
-                      <p className="text-green-200">Time: {new Date().toLocaleTimeString()}</p>
+                      <p className="text-green-200">Time: {new Date().toLocaleTimeString('tr-TR', { timeZone: 'Europe/Istanbul' })}</p>
                     </div>
                   </div>
                 )}
@@ -1745,7 +1864,7 @@ const Projects = () => {
                           </Badge>
                         </div>
                         <div className="mt-2 text-xs text-gray-400">
-                          Oluşturuldu: {new Date(part.created_at).toLocaleDateString('tr-TR')}
+                          Oluşturuldu: {new Date(part.created_at).toLocaleDateString('tr-TR', { timeZone: 'Europe/Istanbul' })}
                         </div>
                       </div>
                     ))}
@@ -2087,7 +2206,7 @@ const Veriler = () => {
   };
 
   const formatDateTime = (dateString) => {
-    return new Date(dateString).toLocaleString('tr-TR');
+    return new Date(dateString).toLocaleString('tr-TR', { timeZone: 'Europe/Istanbul' });
   };
 
   if (error) {
@@ -2256,6 +2375,181 @@ const Veriler = () => {
   );
 };
 
+// Admin User Management Page
+const UserManagement = () => {
+  const { user } = React.useContext(AuthContext);
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [role, setRole] = useState('operator');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [users, setUsers] = useState([]);
+  const [successOpen, setSuccessOpen] = useState(false);
+  const [createdUser, setCreatedUser] = useState(null);
+
+  const fetchUsers = useCallback(async () => {
+    try {
+      const res = await axios.get(`${API}/users`);
+      setUsers(res.data.users || []);
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Kullanıcılar yüklenemedi');
+    }
+  }, []);
+
+  useEffect(() => {
+    if (user?.role === 'admin') {
+      fetchUsers();
+    }
+  }, [user, fetchUsers]);
+
+  const handleCreate = async (e) => {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+    try {
+      const res = await axios.post(`${API}/users/create`, {
+        username,
+        password,
+        role,
+      });
+      setCreatedUser(res.data.user);
+      setSuccessOpen(true);
+      setUsername('');
+      setPassword('');
+      setRole('operator');
+      await fetchUsers();
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Kullanıcı oluşturulamadı');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDelete = async (userId) => {
+    const confirmed = window.confirm('Bu kullanıcıyı silmek istediğinize emin misiniz? Bu işlem geçmiş verilerini silmeyecektir.');
+    if (!confirmed) return;
+    try {
+      await axios.delete(`${API}/users/${userId}`);
+      await fetchUsers();
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Kullanıcı silinemedi');
+    }
+  };
+
+  if (user?.role !== 'admin') {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-gray-900 to-slate-800 flex items-center justify-center p-4">
+        <Card className="w-full max-w-md bg-white/10 backdrop-blur-lg border-white/20">
+          <CardHeader className="text-center">
+            <CardTitle className="text-2xl text-white">Yetkisiz Erişim</CardTitle>
+            <CardDescription className="text-gray-300">
+              Bu sayfaya yalnızca adminler erişebilir.
+            </CardDescription>
+          </CardHeader>
+        </Card>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-gray-900 to-slate-800 p-4 md:p-8">
+      <div className="max-w-5xl mx-auto space-y-8">
+        <div className="flex items-center justify-between">
+          <h1 className="text-2xl font-bold text-white">Kullanıcı Yönetimi</h1>
+          <Button onClick={() => (window.location.href = '/dashboard')} variant="outline" className="border-white/20 text-white hover:bg-white/10">Geri</Button>
+        </div>
+
+        <Card className="bg-white/10 backdrop-blur-lg border-white/20">
+          <CardHeader>
+            <CardTitle className="text-white">Yeni Kullanıcı Oluştur</CardTitle>
+            <CardDescription className="text-gray-300">Sadece "manager" veya "operator" oluşturabilirsiniz.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form onSubmit={handleCreate} className="grid md:grid-cols-3 gap-4">
+              <div className="md:col-span-1">
+                <Select value={role} onValueChange={setRole}>
+                  <SelectTrigger className="bg-white/10 border-white/20 text-white">
+                    <SelectValue placeholder="Rol seçin" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="manager">Manager</SelectItem>
+                    <SelectItem value="operator">Operator</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Input
+                  placeholder="Kullanıcı adı"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  className="bg-white/10 border-white/20 text-white placeholder:text-gray-400"
+                  required
+                />
+              </div>
+              <div>
+                <Input
+                  type="password"
+                  placeholder="Şifre"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="bg-white/10 border-white/20 text-white placeholder:text-gray-400"
+                  required
+                />
+              </div>
+              {error && <div className="md:col-span-3 text-red-400 text-sm">{error}</div>}
+              <div className="md:col-span-3 flex justify-end">
+                <Button type="submit" disabled={loading} className="bg-blue-600 hover:bg-blue-700">
+                  {loading ? 'Oluşturuluyor...' : 'Kullanıcı Oluştur'}
+                </Button>
+              </div>
+            </form>
+          </CardContent>
+        </Card>
+
+        <Card className="bg-white/10 backdrop-blur-lg border-white/20">
+          <CardHeader>
+            <CardTitle className="text-white">Mevcut Kullanıcılar</CardTitle>
+            <CardDescription className="text-gray-300">Kendiniz hariç tüm kullanıcılar listelenir.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {users.length === 0 ? (
+              <div className="text-gray-300">Kullanıcı bulunamadı.</div>
+            ) : (
+              <div className="space-y-2">
+                {users.map((u) => (
+                  <div key={u.id} className="flex items-center justify-between p-3 rounded-md bg-white/5 border border-white/10">
+                    <div className="flex items-center gap-3">
+                      <Badge className="bg-blue-600/20 text-blue-300 border-blue-600/30">{u.role?.toUpperCase()}</Badge>
+                      <span className="text-white">{u.username}</span>
+                    </div>
+                    <Button variant="outline" className="border-red-400/30 text-red-300 hover:bg-red-500/10" onClick={() => handleDelete(u.id)}>
+                      Sil
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      <Dialog open={successOpen} onOpenChange={setSuccessOpen}>
+        <DialogContent className="bg-white/10 border-white/20 text-white">
+          <DialogHeader>
+            <DialogTitle>Kullanıcı Başarıyla Oluşturuldu</DialogTitle>
+            <DialogDescription className="text-gray-300">
+              {createdUser ? `${createdUser.role?.toUpperCase()} - ${createdUser.username}` : 'Başarılı'}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end">
+            <Button onClick={() => setSuccessOpen(false)} className="bg-blue-600 hover:bg-blue-700">Tamam</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+};
+
 // Main App Component with Role-Based Interface
 const MainApp = () => {
   const { user, logout } = React.useContext(AuthContext);
@@ -2285,15 +2579,25 @@ const MainApp = () => {
                 {user?.role?.toUpperCase() || 'USER'}
               </Badge>
               <span className="text-gray-300">Merhaba, {user?.username}</span>
-              <Button 
-                onClick={logout} 
-                variant="outline" 
-                size="sm"
-                className="border-white/20 text-white hover:bg-white/10"
-              >
-                <LogOut className="h-4 w-4 mr-2" />
-                Logout
-              </Button>
+              <div className="flex gap-2">
+                <Button 
+                  onClick={() => window.location.href = '/change-password'} 
+                  variant="outline" 
+                  size="sm"
+                  className="border-white/20 text-white hover:bg-white/10"
+                >
+                  Şifre Değiştir
+                </Button>
+                <Button 
+                  onClick={logout} 
+                  variant="outline" 
+                  size="sm"
+                  className="border-white/20 text-white hover:bg-white/10"
+                >
+                  <LogOut className="h-4 w-4 mr-2" />
+                  Logout
+                </Button>
+              </div>
             </div>
           </div>
         </div>
@@ -2346,6 +2650,13 @@ const MainApp = () => {
             <Veriler />
           </TabsContent>
         </Tabs>
+        {user?.role === 'admin' && (
+          <div className="mt-6">
+            <Button onClick={() => (window.location.href = '/users')} className="bg-emerald-600 hover:bg-emerald-700">
+              <Users className="h-4 w-4 mr-2" /> Kullanıcı Yönetimi
+            </Button>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -2397,8 +2708,14 @@ function App() {
             <Route path="/dashboard" element={
               <ProtectedRoute element={<MainApp />} />
             } />
+            <Route path="/change-password" element={
+              <ProtectedRoute element={<ChangePassword />} />
+            } />
             <Route path="/operator" element={
               <ProtectedRoute element={<OperatorScanner />} requiredRoles={['operator']} />
+            } />
+            <Route path="/users" element={
+              <ProtectedRoute element={<UserManagement />} requiredRoles={['admin']} />
             } />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

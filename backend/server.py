@@ -23,9 +23,21 @@ from enum import Enum
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
+# Timezone configuration
+from zoneinfo import ZoneInfo
+import time as _time
+IST_TZ = ZoneInfo("Europe/Istanbul")
+
+def now_ist() -> datetime:
+    return datetime.now(IST_TZ)
+
+os.environ.setdefault('TZ', 'Europe/Istanbul')
+if hasattr(_time, 'tzset'):
+    _time.tzset()
+
 # MongoDB connection
 mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
+client = AsyncIOMotorClient(mongo_url, tz_aware=True, tzinfo=IST_TZ)
 db = client[os.environ['DB_NAME']]
 
 # Security
@@ -51,7 +63,7 @@ class User(BaseModel):
     username: str
     password_hash: str
     role: UserRole
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=now_ist)
 
 class UserCreate(BaseModel):
     username: str
@@ -67,7 +79,7 @@ class Project(BaseModel):
     name: str
     description: Optional[str] = None
     process_steps: List[str]  # Ordered list of process step names
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=now_ist)
     created_by: str
 
 class ProjectCreate(BaseModel):
@@ -81,7 +93,7 @@ class Part(BaseModel):
     project_id: str
     current_step_index: int = 0
     status: ProcessStatus = ProcessStatus.PENDING
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=now_ist)
 
 class PartWithStepInfo(BaseModel):
     id: str
@@ -109,13 +121,13 @@ class ProcessInstance(BaseModel):
     end_time: Optional[datetime] = None
     start_qr_code: str = Field(default_factory=lambda: str(uuid.uuid4()))
     end_qr_code: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=now_ist)
 
 class WorkOrderQRCode(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     part_id: str
     qr_code: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=now_ist)
 
 class QRScanRequest(BaseModel):
     qr_code: str
@@ -134,6 +146,10 @@ class ProcessActionRequest(BaseModel):
     process_index: int
     action: str  # "start" or "end"
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
 # Create the main app
 app = FastAPI(title="Production Tracking System")
 api_router = APIRouter(prefix="/api")
@@ -151,7 +167,7 @@ def create_jwt_token(user_id: str, username: str, role: str) -> str:
         "user_id": user_id,
         "username": username,
         "role": role,
-        "exp": datetime.utcnow() + timedelta(hours=24)
+        "exp": int((now_ist() + timedelta(hours=24)).timestamp())
     }
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
@@ -177,7 +193,7 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
         if exp is None:
             raise HTTPException(status_code=401, detail="Token has no expiration")
         
-        if datetime.utcnow() > datetime.fromtimestamp(exp):
+        if _time.time() > exp:
             raise HTTPException(status_code=401, detail="Token has expired")
             
         user = await db.users.find_one({"id": payload["user_id"]})
@@ -587,8 +603,7 @@ async def get_part_qr_codes_pdf(part_id: str, current_user: User = Depends(get_c
     draw_page.text((logo_right_edge, current_y + 25), system_title, fill=(0, 0, 0), font=font_header)
     
     # Draw current date in top right corner
-    from datetime import datetime
-    current_date = datetime.now().strftime("%d/%m/%Y")
+    current_date = now_ist().strftime("%d/%m/%Y")
     date_text = f"Tarih: {current_date}"
     date_width = draw_page.textlength(date_text, font=font_date)
     draw_page.text((page_width - margin - date_width, current_y + 25), date_text, fill=(0, 0, 0), font=font_date)
@@ -801,7 +816,7 @@ async def process_action(action_data: ProcessActionRequest, current_user: User =
             raise HTTPException(status_code=400, detail="Process already completed")
         
         # Start the process
-        now = datetime.utcnow()
+        now = now_ist()
         await db.process_instances.update_one(
             {"id": target_process.id},
             {
@@ -838,7 +853,7 @@ async def process_action(action_data: ProcessActionRequest, current_user: User =
             raise HTTPException(status_code=400, detail="Process must be started first")
         
         # Complete the process
-        now = datetime.utcnow()
+        now = now_ist()
         await db.process_instances.update_one(
             {"id": target_process.id},
             {
@@ -929,7 +944,7 @@ async def scan_start_qr(scan_data: QRScanRequest, current_user: User = Depends(g
         raise HTTPException(status_code=400, detail="Process already completed")
     
     # Start the process
-    now = datetime.utcnow()
+    now = now_ist()
     await db.process_instances.update_one(
         {"id": process.id},
         {
@@ -980,7 +995,7 @@ async def scan_end_qr(scan_data: QRScanRequest, current_user: User = Depends(get
         raise HTTPException(status_code=400, detail="Process must be started first")
     
     # Complete the process
-    now = datetime.utcnow()
+    now = now_ist()
     await db.process_instances.update_one(
         {"id": process.id},
         {
@@ -1103,6 +1118,103 @@ async def get_process_durations(current_user: User = Depends(get_current_user)):
     
     return duration_data
 
+# User Routes
+@api_router.post("/users/create")
+async def admin_create_user(user_data: UserCreate, current_user: User = Depends(get_current_user)):
+    """
+    Admin-only endpoint to create a new user with role manager or operator.
+    Returns standardized JSON: {"success": bool, "message": str, "user": {...}}
+    """
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    # Only allow creating manager or operator
+    if user_data.role not in [UserRole.MANAGER, UserRole.OPERATOR]:
+        raise HTTPException(status_code=400, detail="Invalid role. Only 'manager' or 'operator' can be created.")
+
+    # Ensure unique username
+    existing_user = await db.users.find_one({"username": user_data.username})
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Username already exists")
+
+    # Create user
+    hashed_password = hash_password(user_data.password)
+    new_user = User(
+        username=user_data.username,
+        password_hash=hashed_password,
+        role=user_data.role,
+    )
+    await db.users.insert_one(new_user.dict())
+
+    return {
+        "success": True,
+        "message": "User created successfully",
+        "user": {
+            "id": new_user.id,
+            "username": new_user.username,
+            "role": new_user.role,
+        },
+    }
+
+
+@api_router.get("/users")
+async def list_users(current_user: User = Depends(get_current_user)):
+    """
+    Admin-only endpoint to list all users except the current admin.
+    Returns: {"success": true, "users": [{id, username, role, created_at}]}
+    """
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    users = await db.users.find({"id": {"$ne": current_user.id}}).to_list(10000)
+    users_sanitized = [
+        {
+            "id": u["id"],
+            "username": u["username"],
+            "role": u["role"],
+            "created_at": u.get("created_at"),
+        }
+        for u in users
+    ]
+    return {"success": True, "users": users_sanitized}
+
+
+@api_router.delete("/users/{user_id}")
+async def delete_user(user_id: str, current_user: User = Depends(get_current_user)):
+    """
+    Admin-only endpoint to delete a user by id. Does not delete any historical production data.
+    Returns standardized JSON: {"success": bool, "message": str}
+    """
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    # Prevent deleting self just in case frontend filter is bypassed
+    if user_id == current_user.id:
+        raise HTTPException(status_code=400, detail="Cannot delete the currently logged-in admin user")
+
+    result = await db.users.delete_one({"id": user_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    return {"success": True, "message": "User deleted successfully"}
+
+@api_router.post("/users/change-password")
+async def change_password(change_password_data: ChangePasswordRequest, current_user: User = Depends(get_current_user)):
+    """
+    Change the current user's password.
+    """
+    if not verify_password(change_password_data.current_password, current_user.password_hash):
+        raise HTTPException(status_code=401, detail="Current password is incorrect")
+    
+    new_hashed_password = hash_password(change_password_data.new_password)
+    
+    await db.users.update_one(
+        {"id": current_user.id},
+        {"$set": {"password_hash": new_hashed_password}}
+    )
+    
+    return {"message": "Password changed successfully"}
+
 # Include the router in the main app
 app.include_router(api_router)
 
@@ -1120,6 +1232,14 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+for handler in logging.getLogger().handlers:
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    try:
+        # Use time.localtime which respects TZ we set above
+        formatter.converter = _time.localtime
+    except Exception:
+        pass
+    handler.setFormatter(formatter)
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
