@@ -91,7 +91,7 @@ class Part(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     part_number: str
     project_id: str
-    total_quantity: int = 1
+    planned_quantity: int = Field(..., gt=0, description="Total number of products planned for production")
     current_step_index: int = 0
     status: ProcessStatus = ProcessStatus.PENDING
     created_at: datetime = Field(default_factory=now_ist)
@@ -100,7 +100,7 @@ class PartWithStepInfo(BaseModel):
     id: str
     part_number: str
     project_id: str
-    total_quantity: int
+    planned_quantity: int
     current_step_index: int
     status: ProcessStatus
     created_at: datetime
@@ -113,7 +113,7 @@ class PartWithStepInfo(BaseModel):
 class PartCreate(BaseModel):
     part_number: str
     project_id: str
-    total_quantity: int = 1
+    planned_quantity: int = Field(..., gt=0, description="Total number of products planned for production")
     process_steps: List[str]  # Required custom process steps for this work order
 
 class ProcessInstance(BaseModel):
@@ -130,6 +130,7 @@ class ProcessInstance(BaseModel):
     end_time: Optional[datetime] = None
     start_qr_code: str = Field(default_factory=lambda: str(uuid.uuid4()))
     end_qr_code: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    process_records: List[dict] = []  # List of process quantity records
     created_at: datetime = Field(default_factory=now_ist)
 
 class WorkOrderQRCode(BaseModel):
@@ -154,7 +155,7 @@ class ProcessActionRequest(BaseModel):
     password: str
     process_index: int
     action: str  # "start" or "end"
-    quantity: int = 1
+    process_quantity: int = Field(..., gt=0, description="Number of products affected by this action")
 
 class ChangePasswordRequest(BaseModel):
     current_password: str
@@ -327,14 +328,14 @@ async def get_project_parts(project_id: str, current_user: User = Depends(get_cu
         # Calculate total counts across all steps
         total_completed = sum(pi["completed_count"] for pi in process_instances)
         total_in_progress = sum(pi["in_progress_count"] for pi in process_instances)
-        total_remaining = part["total_quantity"] - total_completed - total_in_progress
+        total_remaining = part.get("planned_quantity", 1) - total_completed - total_in_progress
         
         # Create PartWithStepInfo object
         part_with_info = PartWithStepInfo(
             id=part["id"],
             part_number=part["part_number"],
             project_id=part["project_id"],
-            total_quantity=part.get("total_quantity", 1),
+            planned_quantity=part.get("planned_quantity", 1),
             current_step_index=part["current_step_index"],
             status=part["status"],
             created_at=part["created_at"],
@@ -385,9 +386,9 @@ async def create_part(part_data: PartCreate, current_user: User = Depends(get_cu
     if not part_data.process_steps or len(part_data.process_steps) == 0:
         raise HTTPException(status_code=400, detail="At least one process step must be selected")
     
-    # Validation: Quantity must be positive
-    if part_data.total_quantity <= 0:
-        raise HTTPException(status_code=400, detail="Total quantity must be greater than 0")
+    # Validate planned quantity
+    if part_data.planned_quantity <= 0:
+        raise HTTPException(status_code=400, detail="Planned quantity must be greater than 0")
     
     # Verify project exists
     project = await db.projects.find_one({"id": part_data.project_id})
@@ -404,9 +405,10 @@ async def create_part(part_data: PartCreate, current_user: User = Depends(get_cu
             part_id=part.id,
             step_name=step_name,
             step_index=i,
-            remaining_count=part.total_quantity if i == 0 else 0,
+            remaining_count=part.planned_quantity if i == 0 else 0,
             in_progress_count=0,
-            completed_count=0
+            completed_count=0,
+            process_records=[]
         )
         await db.process_instances.insert_one(process_instance.dict())
     
@@ -798,8 +800,8 @@ async def process_action(action_data: ProcessActionRequest, current_user: User =
         user = user_doc
     
     # Validate quantity
-    if action_data.quantity <= 0:
-        raise HTTPException(status_code=400, detail="Quantity must be greater than 0")
+    if action_data.process_quantity <= 0:
+        raise HTTPException(status_code=400, detail="Process quantity must be greater than 0")
     
     # Find work order QR code
     work_order_qr = await db.work_order_qr_codes.find_one({"qr_code": action_data.qr_code})
@@ -845,8 +847,35 @@ async def process_action(action_data: ProcessActionRequest, current_user: User =
         if target_process.status == ProcessStatus.COMPLETED:
             raise HTTPException(status_code=400, detail="Process already completed")
         
+        # Get part to check remaining quantity
+        # Calculate total processed quantity so far
+        all_process_instances = await db.process_instances.find({"part_id": part["id"]}).to_list(100)
+        total_processed = 0
+        for pi in all_process_instances:
+            for record in pi.get("process_records", []):
+                if record.get("action") == "start":
+                    total_processed += record.get("process_quantity", 0)
+        
+        # Check if process quantity exceeds remaining quantity
+        remaining_quantity = part["planned_quantity"] - total_processed
+        if action_data.process_quantity > remaining_quantity:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Process quantity ({action_data.process_quantity}) exceeds remaining quantity ({remaining_quantity})"
+            )
+        
         # Start the process
         now = now_ist()
+        
+        # Add process record
+        process_record = {
+            "action": "start",
+            "process_quantity": action_data.process_quantity,
+            "timestamp": now,
+            "user": user["username"]
+        }
+        
+        # Add the process record to the existing records
         await db.process_instances.update_one(
             {"id": target_process.id},
             {
@@ -854,7 +883,8 @@ async def process_action(action_data: ProcessActionRequest, current_user: User =
                     "status": ProcessStatus.IN_PROGRESS,
                     "operator_id": user["id"],
                     "start_time": now
-                }
+                },
+                "$push": {"process_records": process_record}
             }
         )
         
@@ -873,7 +903,9 @@ async def process_action(action_data: ProcessActionRequest, current_user: User =
             "message": "Process started successfully",
             "step_name": target_process.step_name,
             "operator": user["username"],
-            "start_time": now
+            "start_time": now,
+            "process_quantity": action_data.process_quantity,
+            "remaining_quantity": remaining_quantity - action_data.process_quantity
         }
     
     # Handle end action
@@ -882,21 +914,58 @@ async def process_action(action_data: ProcessActionRequest, current_user: User =
         if target_process.status != ProcessStatus.IN_PROGRESS:
             raise HTTPException(status_code=400, detail="Process must be started first")
         
+        # Calculate total started quantity for this process instance
+        total_started = 0
+        for record in target_process.process_records:
+            if record.get("action") == "start":
+                total_started += record.get("process_quantity", 0)
+        
+        # Calculate total finished quantity for this process instance
+        total_finished = 0
+        for record in target_process.process_records:
+            if record.get("action") == "end":
+                total_finished += record.get("process_quantity", 0)
+        
+        # Check if finish quantity exceeds remaining started quantity
+        remaining_started = total_started - total_finished
+        if action_data.process_quantity > remaining_started:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Process quantity ({action_data.process_quantity}) exceeds remaining started quantity ({remaining_started})"
+            )
+        
         # Complete the process
         now = now_ist()
+        
+        # Add process record
+        process_record = {
+            "action": "end",
+            "process_quantity": action_data.process_quantity,
+            "timestamp": now,
+            "user": user["username"]
+        }
+        
+        # Check if all started quantity is now finished
+        new_total_finished = total_finished + action_data.process_quantity
+        update_data = {
+            "end_time": now
+        }
+        
+        if new_total_finished >= total_started:
+            update_data["status"] = ProcessStatus.COMPLETED
+        
+        # Add the process record to the existing records
         await db.process_instances.update_one(
             {"id": target_process.id},
             {
-                "$set": {
-                    "status": ProcessStatus.COMPLETED,
-                    "end_time": now
-                }
+                "$set": update_data,
+                "$push": {"process_records": process_record}
             }
         )
         
         # Update part status
-        if target_process.step_index == len(process_instances) - 1:
-            # This was the last step
+        if target_process.step_index == len(process_instances) - 1 and new_total_finished >= total_started:
+            # This was the last step and it's fully completed
             await db.parts.update_one(
                 {"id": part["id"]},
                 {
@@ -906,7 +975,7 @@ async def process_action(action_data: ProcessActionRequest, current_user: User =
                     }
                 }
             )
-        else:
+        elif new_total_finished >= total_started:
             # Update current step index to the next step
             await db.parts.update_one(
                 {"id": part["id"]},
@@ -922,7 +991,9 @@ async def process_action(action_data: ProcessActionRequest, current_user: User =
             "message": "Process completed successfully",
             "step_name": target_process.step_name,
             "operator": user["username"],
-            "end_time": now
+            "end_time": now,
+            "process_quantity": action_data.process_quantity,
+            "remaining_started_quantity": remaining_started - action_data.process_quantity
         }
     
     else:
@@ -1097,22 +1168,44 @@ async def get_dashboard_overview(current_user: User = Depends(get_current_user))
             # Calculate total counts across all steps
             total_completed = sum(pi["completed_count"] for pi in process_instances)
             total_in_progress = sum(pi["in_progress_count"] for pi in process_instances)
-            total_remaining = part.get("total_quantity", 1) - total_completed - total_in_progress
+            total_remaining = part.get("planned_quantity", 1) - total_completed - total_in_progress
             
             # Calculate progress percentage based on completed units
-            progress_percentage = (total_completed / part.get("total_quantity", 1)) * 100 if part.get("total_quantity", 1) > 0 else 0
+            progress_percentage = (total_completed / part.get("planned_quantity", 1)) * 100 if part.get("planned_quantity", 1) > 0 else 0
+            
+            # Calculate quantity progress
+            total_planned = part.get("planned_quantity", 1)
+            total_processed = 0
+            total_completed_qty = 0
+            
+            for pi in process_instances:
+                for record in pi.get("process_records", []):
+                    if record.get("action") == "start":
+                        total_processed += record.get("process_quantity", 0)
+                    elif record.get("action") == "end":
+                        total_completed_qty += record.get("process_quantity", 0)
             
             dashboard_data.append({
-                "part": Part(**part),
-                "project": Project(**project),
+                "part": {
+                    "id": part["id"],
+                    "part_number": part["part_number"],
+                    "planned_quantity": total_planned
+                },
+                "project": {
+                    "id": project["id"],
+                    "name": project["name"]
+                },
                 "current_step": current_step,
-                "total_steps": len(process_instances),  # Actual number of steps for this work order
-                "progress_percentage": progress_percentage,
-                "quantity_info": {
-                    "total_quantity": part.get("total_quantity", 1),
-                    "completed_count": total_completed,
-                    "in_progress_count": total_in_progress,
-                    "remaining_count": max(0, total_remaining)
+                "progress": {
+                    "completed_steps": len([pi for pi in process_instances if pi["status"] == ProcessStatus.COMPLETED]),
+                    "total_steps": len(process_instances),
+                    "percentage": progress_percentage
+                },
+                "quantity_progress": {
+                    "planned_quantity": total_planned,
+                    "processed_quantity": total_processed,
+                    "completed_quantity": total_completed_qty,
+                    "remaining_quantity": total_planned - total_processed
                 },
                 "step_details": [
                     {
