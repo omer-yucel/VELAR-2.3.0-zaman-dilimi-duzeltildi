@@ -363,6 +363,7 @@ const OperatorScanner = () => {
   const [workOrderData, setWorkOrderData] = useState(null);
   const [selectedProcess, setSelectedProcess] = useState(null);
   const [actionType, setActionType] = useState('start');
+  const [processQuantity, setProcessQuantity] = useState(1);
   const [showProcessSelection, setShowProcessSelection] = useState(false);
   // New state for confirmation message
   const [showConfirmationMessage, setShowConfirmationMessage] = useState(false);
@@ -498,6 +499,11 @@ const OperatorScanner = () => {
   const handleProcessAction = async () => {
     if (!selectedProcess || !workOrderData || loading) return;
     
+    if (!processQuantity || processQuantity <= 0) {
+      setError('İşlem miktarı 1 veya daha büyük olmalıdır');
+      return;
+    }
+    
     setLoading(true);
     setError('');
     setResult(null);
@@ -508,10 +514,15 @@ const OperatorScanner = () => {
         username: user.username,
         password: 'session_authenticated',
         process_index: selectedProcess.step_index,
-        action: actionType
+        action: actionType,
+        process_quantity: processQuantity
       });
 
-      setResult(response.data);
+      setResult({
+        ...response.data,
+        processQuantity: response.data.process_quantity,
+        remainingQuantity: response.data.remaining_quantity || response.data.remaining_started_quantity
+      });
       
       // Show confirmation message
       setShowConfirmationMessage(true);
@@ -523,6 +534,7 @@ const OperatorScanner = () => {
         setSelectedProcess(null);
         setShowProcessSelection(false);
         setQrCode('');
+        setProcessQuantity(1);
         setShowConfirmationMessage(false);
         if (!manualMode && !isDialogShowing.current) {
           startCamera();
@@ -709,6 +721,23 @@ const OperatorScanner = () => {
                     </div>
                   </div>
                 )}
+
+                {/* Process Quantity Input */}
+                {selectedProcess && (
+                  <div>
+                    <label className="block text-sm font-medium text-white mb-2">
+                      İşlem Miktarı *
+                    </label>
+                    <Input
+                      type="number"
+                      min="1"
+                      value={processQuantity}
+                      onChange={(e) => setProcessQuantity(parseInt(e.target.value) || 1)}
+                      className="bg-white/10 border-white/20 text-white placeholder:text-gray-400"
+                      placeholder="Bu işlemde kaç ürün işlenecek"
+                    />
+                  </div>
+                )}
                 
                 {/* Submit Button */}
                 <Button 
@@ -735,6 +764,7 @@ const OperatorScanner = () => {
                     setWorkOrderData(null);
                     setSelectedProcess(null);
                     setShowProcessSelection(false);
+                    setProcessQuantity(1);
                     if (!manualMode) {
                       startCamera();
                     }
@@ -890,6 +920,14 @@ const OperatorScanner = () => {
                       <p className="text-white font-medium">{result.message}</p>
                       <p className="text-green-200">Process Step: {result.step_name}</p>
                       <p className="text-green-200">Time: {new Date().toLocaleTimeString('tr-TR', { timeZone: 'Europe/Istanbul' })}</p>
+                      {result.processQuantity && (
+                        <div className="mt-2 text-sm text-gray-300">
+                          <p>İşlenen Miktar: {result.processQuantity}</p>
+                          {result.remainingQuantity !== undefined && (
+                            <p>Kalan Miktar: {result.remainingQuantity}</p>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
@@ -995,6 +1033,7 @@ const QRScanner = () => {
   const [workOrderData, setWorkOrderData] = useState(null);
   const [selectedProcess, setSelectedProcess] = useState(null);
   const [actionType, setActionType] = useState('start');
+  const [processQuantity, setProcessQuantity] = useState(1);
   const [showProcessSelection, setShowProcessSelection] = useState(false);
 
   // Handle scanning a work order QR code
@@ -1032,6 +1071,11 @@ const QRScanner = () => {
     e.preventDefault();
     if (!selectedProcess || !workOrderData || loading) return;
     
+    if (!processQuantity || processQuantity <= 0) {
+      setError('İşlem miktarı 1 veya daha büyük olmalıdır');
+      return;
+    }
+    
     setLoading(true);
     setError('');
     setResult(null);
@@ -1042,10 +1086,15 @@ const QRScanner = () => {
         username,
         password,
         process_index: selectedProcess.step_index,
-        action: actionType
+        action: actionType,
+        process_quantity: processQuantity
       });
 
-      setResult(response.data);
+      setResult({
+        ...response.data,
+        processQuantity: response.data.process_quantity,
+        remainingQuantity: response.data.remaining_quantity || response.data.remaining_started_quantity
+      });
       
       // Reset process selection
       setSelectedProcess(null);
@@ -1053,6 +1102,7 @@ const QRScanner = () => {
       setShowProcessSelection(false);
       setUsername('');
       setPassword('');
+      setProcessQuantity(1);
       
     } catch (error) {
       setError(error.response?.data?.detail || 'Process action failed');
@@ -1205,6 +1255,23 @@ const QRScanner = () => {
                   </Select>
                 </div>
               )}
+
+              {/* Process Quantity Input */}
+              {selectedProcess && (
+                <div>
+                  <label className="block text-sm font-medium text-white mb-2">
+                    İşlem Miktarı *
+                  </label>
+                  <Input
+                    type="number"
+                    min="1"
+                    value={processQuantity}
+                    onChange={(e) => setProcessQuantity(parseInt(e.target.value) || 1)}
+                    className="bg-white/10 border-white/20 text-white placeholder:text-gray-400"
+                    placeholder="Bu işlemde kaç ürün işlenecek"
+                  />
+                </div>
+              )}
               
               {/* Submit Button */}
               <Button 
@@ -1227,6 +1294,7 @@ const QRScanner = () => {
                   setWorkOrderData(null);
                   setSelectedProcess(null);
                   setShowProcessSelection(false);
+                  setProcessQuantity(1);
                 }}
                 variant="outline"
                 className="w-full border-white/20 text-white hover:bg-white/10"
@@ -1248,6 +1316,14 @@ const QRScanner = () => {
           <p className="text-white text-sm">{result.message}</p>
           <p className="text-gray-300 text-sm">Step: {result.step_name}</p>
           <p className="text-gray-300 text-sm">Operator: {result.operator}</p>
+          {result.processQuantity && (
+            <div className="mt-2 text-sm text-gray-300">
+              <p>İşlenen Miktar: {result.processQuantity}</p>
+              {result.remainingQuantity !== undefined && (
+                <p>Kalan Miktar: {result.remainingQuantity}</p>
+              )}
+            </div>
+          )}
         </div>
       )}
       
@@ -1321,6 +1397,18 @@ const Dashboard = () => {
                 <span className="text-gray-300">Current Step:</span>
                 <span className="text-white font-medium">{item.current_step}</span>
               </div>
+              <div className="flex items-center justify-between">
+                <span className="text-gray-300">Planlanan Miktar:</span>
+                <span className="text-green-400">{item.part.planned_quantity}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-gray-300">İşlenen Miktar:</span>
+                <span className="text-yellow-400">{item.quantity_progress?.processed_quantity || 0}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-gray-300">Tamamlanan Miktar:</span>
+                <span className="text-blue-400">{item.quantity_progress?.completed_quantity || 0}</span>
+              </div>
               <div className="mt-4">
                 <div className="flex justify-between text-sm text-gray-400 mb-2">
                   <span>Progress</span>
@@ -1359,7 +1447,7 @@ const Projects = () => {
   const [selectedProject, setSelectedProject] = useState('');
   const [newPartNumber, setNewPartNumber] = useState('');
   const [newProjectName, setNewProjectName] = useState('');
-  const [newPartQuantity, setNewPartQuantity] = useState(1);
+  const [plannedQuantity, setPlannedQuantity] = useState(1);
   const [deleteItemType, setDeleteItemType] = useState('project'); // 'project' or 'part'
   const [deleteSelectedId, setDeleteSelectedId] = useState('');
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -1466,16 +1554,23 @@ const Projects = () => {
       return;
     }
 
+    if (!plannedQuantity || plannedQuantity <= 0) {
+      alert('Planlanan miktar 1 veya daha büyük olmalıdır');
+      return;
+    }
+
     try {
       // Create the work order within the selected project using custom steps
       await axios.post(`${API}/parts`, {
         part_number: newPartNumber,
         project_id: selectedProject,
+        planned_quantity: parseInt(plannedQuantity),
         process_steps: selectedSteps
       });
       
       setNewPartNumber('');
       setSelectedProject('');
+      setPlannedQuantity(1);
       setSelectedSteps([]);
       setShowStepSelector(false);
       fetchProjectsWithParts();
@@ -1652,6 +1747,20 @@ const Projects = () => {
                 onChange={(e) => setNewPartNumber(e.target.value)}
                 className="bg-white/10 border-white/20 text-white placeholder:text-gray-400"
                 required
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-white mb-2">
+                Planlanan Miktar *
+              </label>
+              <Input
+                type="number"
+                min="1"
+                value={plannedQuantity}
+                onChange={(e) => setPlannedQuantity(parseInt(e.target.value) || 1)}
+                className="bg-white/10 border-white/20 text-white placeholder:text-gray-400"
+                placeholder="Üretilecek toplam ürün sayısı"
               />
             </div>
             
@@ -1857,12 +1966,32 @@ const Projects = () => {
                           <div>
                             <span className="text-white font-medium">{part.part_number}</span>
                             <div className="text-sm text-gray-300 mt-1">
-                              Adım: {part.current_step_index + 1} / {part.total_steps}
+                              Adım: {part.current_step_index + 1} / {part.total_steps} | Miktar: {part.planned_quantity}
                             </div>
                           </div>
                           <Badge className={`${getStatusColor(part.status)} text-white`}>
                             {part.status.replace('_', ' ').toUpperCase()}
                           </Badge>
+                        </div>
+                        <div className="space-y-2 mt-2">
+                          <div className="flex justify-between text-sm">
+                            <span className="text-gray-400">Mevcut Adım:</span>
+                            <span className="text-blue-400">{part.current_step_name}</span>
+                          </div>
+                          <div className="flex justify-between text-sm">
+                            <span className="text-gray-400">Planlanan Miktar:</span>
+                            <span className="text-green-400">{part.planned_quantity}</span>
+                          </div>
+                          <div className="flex justify-between text-sm">
+                            <span className="text-gray-400">İlerleme:</span>
+                            <span className="text-green-400">{Math.round(part.progress_percentage)}%</span>
+                          </div>
+                          <div className="w-full bg-gray-700 rounded-full h-2">
+                            <div 
+                              className="bg-blue-600 h-2 rounded-full transition-all duration-300" 
+                              style={{ width: `${part.progress_percentage}%` }}
+                            ></div>
+                          </div>
                         </div>
                         <div className="mt-2 text-xs text-gray-400">
                           Oluşturuldu: {new Date(part.created_at).toLocaleDateString('tr-TR', { timeZone: 'Europe/Istanbul' })}
@@ -2727,4 +2856,3 @@ function App() {
 }
 
 export default App;
-
